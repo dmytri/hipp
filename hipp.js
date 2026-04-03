@@ -22,7 +22,6 @@ function getVersionFromGit() {
     const rawTag = execSync('git describe --tags --abbrev=0', { stdio: ['pipe', 'pipe', 'ignore'] })
       .toString().trim();
     
-    // Strict HIPP Rule: Tag must start with 'v'
     if (!rawTag.startsWith('v')) {
       log.error(`❌ Integrity Violation: Tag "${rawTag}" does not start with "v".`);
       log.info("HIPP requires release tags to follow the 'v1.2.3' convention.");
@@ -35,7 +34,7 @@ function getVersionFromGit() {
       process.exit(1);
     }
 
-    return validVersion; // semver.valid returns the version without 'v' if it's valid
+    return validVersion; 
   } catch (e) {
     log.error("❌ Integrity Error: No git tags found.");
     process.exit(1);
@@ -92,19 +91,23 @@ async function run() {
     }
   }
 
+  let modified = false;
   try {
     pkg.version = gitVersion;
     fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2));
-    log.info(`🔥 Ignition...`);
+    modified = true;
     
+    log.info(`🔥 Ignition...`);
     execSync(`npm publish ${npmArgs}`, { stdio: 'inherit' });
     log.success(`\n✨ Success! Published ${pkg.name}@${gitVersion}`);
   } catch (err) {
     log.error(`\n💥 Launch failed.`);
   } finally {
-    pkg.version = "0.0.0";
-    fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2));
-    console.log(`🧹 Restored source integrity (0.0.0)`);
+    if (modified) {
+      // Use Git to restore the file to its committed 0.0.0 state
+      execSync('git checkout package.json', { stdio: 'ignore' });
+      console.log(`🧹 Restored source integrity (git checkout package.json)`);
+    }
   }
 }
 
