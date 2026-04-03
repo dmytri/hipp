@@ -21,12 +21,21 @@ function getVersionFromGit() {
   try {
     const rawTag = execSync('git describe --tags --abbrev=0', { stdio: ['pipe', 'pipe', 'ignore'] })
       .toString().trim();
-    const validVersion = semver.valid(rawTag);
-    if (!validVersion) {
-      log.error(`❌ Semver Violation: Tag "${rawTag}" is invalid.`);
+    
+    // Strict HIPP Rule: Tag must start with 'v'
+    if (!rawTag.startsWith('v')) {
+      log.error(`❌ Integrity Violation: Tag "${rawTag}" does not start with "v".`);
+      log.info("HIPP requires release tags to follow the 'v1.2.3' convention.");
       process.exit(1);
     }
-    return validVersion;
+
+    const validVersion = semver.valid(rawTag);
+    if (!validVersion) {
+      log.error(`❌ Semver Violation: Tag "${rawTag}" is not a valid semantic version.`);
+      process.exit(1);
+    }
+
+    return validVersion; // semver.valid returns the version without 'v' if it's valid
   } catch (e) {
     log.error("❌ Integrity Error: No git tags found.");
     process.exit(1);
@@ -47,11 +56,8 @@ async function run() {
   const args = process.argv.slice(2);
   const separatorIndex = args.indexOf('--');
   
-  // Arguments for HIPP itself
   const hippArgs = separatorIndex !== -1 ? args.slice(0, separatorIndex) : args;
-  // Arguments to pass to npm publish
   const npmArgs = separatorIndex !== -1 ? args.slice(separatorIndex + 1).join(' ') : '';
-
   const skipPrompt = hippArgs.includes('--yes') || hippArgs.includes('-y');
   
   const pkgPath = path.resolve(process.cwd(), 'package.json');
@@ -70,13 +76,13 @@ async function run() {
   const status = execSync('git status --porcelain').toString();
   if (status) {
     log.error("❌ Integrity Error: Uncommitted changes found.");
-    log.info("HIPP requires a clean working directory to ensure the registry matches Git.");
+    log.info("Clean your directory before publishing to ensure Git-Registry parity.");
     process.exit(1);
   }
 
   const gitVersion = getVersionFromGit();
   log.info(`🚀 \x1b[36mHIPP: High Integrity Package Publisher\x1b[0m`);
-  log.success(`🏷️  Git Tag Truth: ${gitVersion}`);
+  log.success(`🏷️  Git Tag Truth: v${gitVersion}`);
 
   if (!skipPrompt) {
     const confirmed = await askConfirmation(`🚀 Confirm launch of \x1b[36m${pkg.name}@${gitVersion}\x1b[0m?`);
@@ -92,7 +98,6 @@ async function run() {
     log.info(`🔥 Ignition...`);
     
     execSync(`npm publish ${npmArgs}`, { stdio: 'inherit' });
-
     log.success(`\n✨ Success! Published ${pkg.name}@${gitVersion}`);
   } catch (err) {
     log.error(`\n💥 Launch failed.`);
@@ -104,7 +109,7 @@ async function run() {
 }
 
 if (process.argv.includes('--help') || process.argv.includes('-h')) {
-  console.log(`\x1b[36mHIPP - High Integrity Package Publisher\x1b[0m\nBy Dmytri Kleiner <dev@dmytri.to>\n\nUsage: npx hipp [hipp-options] [-- npm-options]`);
+  console.log(`\x1b[36mHIPP - High Integrity Package Publisher\x1b[0m\nBy Dmytri Kleiner <dev@dmytri.to>\n\nUsage: npx hipp [options] [-- npm-options]`);
 } else {
   run();
 }
