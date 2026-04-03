@@ -7,7 +7,7 @@
     "hipp": "./hipp.js"
   },
   "scripts": {
-    "hipp": "node hipp.js"
+    "hipp": "npm install && node hipp.js"
   },
   "author": "Dmytri Kleiner <dev@dmytri.to>",
   "dependencies": {
