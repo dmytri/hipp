@@ -372,11 +372,43 @@ function getTrackedFiles() {
     .filter(Boolean);
 }
 
+function getTrackedFilesFromDir(repoDir) {
+  const out = execFileSync('git', ['ls-files', '-z'], {
+    encoding: 'buffer',
+    stdio: ['pipe', 'pipe', 'pipe'],
+    cwd: repoDir,
+  });
+
+  return out
+    .toString('utf8')
+    .split('\0')
+    .filter(Boolean);
+}
+
 function copyTrackedFiles(stageDir, files) {
   const repoRoot = process.cwd();
 
   for (const rel of files) {
     const src = path.join(repoRoot, rel);
+    const dest = path.join(stageDir, rel);
+    const stat = fs.lstatSync(src);
+
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+
+    if (stat.isSymbolicLink()) {
+      const target = fs.readlinkSync(src);
+      fs.symlinkSync(target, dest);
+    } else if (stat.isDirectory()) {
+      fs.mkdirSync(dest, { recursive: true });
+    } else if (stat.isFile()) {
+      fs.copyFileSync(src, dest);
+    }
+  }
+}
+
+function copyTrackedFilesFromDir(stageDir, repoDir, files) {
+  for (const rel of files) {
+    const src = path.join(repoDir, rel);
     const dest = path.join(stageDir, rel);
     const stat = fs.lstatSync(src);
 
@@ -462,38 +494,25 @@ async function runVerify(packageSpec) {
       fail(`❌ JSON meta (origin/tag) not found in README`);
     }
 
-    const manifestBase64 = extractManifestFromReadme(stagedReadme);
-    if (!manifestBase64) {
+    const manifestStr = extractManifestFromReadme(stagedReadme);
+    if (!manifestStr) {
       fail(`❌ Manifest not found in README`);
     }
 
-    const manifest = parseManifest(manifestBase64);
+    const manifest = parseManifest(manifestStr);
     if (!manifest || !manifest.hash || !manifest.signature) {
       fail(`❌ Invalid manifest format`);
     }
 
+    const originUrl = jsonMeta.origin;
+    const tag = jsonMeta.tag;
+
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `hipp-verify-git-`));
+    const stageDir = fs.mkdtempSync(path.join(os.tmpdir(), `hipp-verify-stage-`));
+
     try {
-      log.info(`🌿 Fetching from git origin...`);
-
-      const originUrl = jsonMeta.origin;
-      const tag = jsonMeta.tag;
-
+      log.info(`🌿 Fetching from git origin at tag ${tag}...`);
       git(['clone', '--branch', tag, '--depth', '1', originUrl, tmpDir], { stdio: 'pipe' });
-
-      const clonedReadmePath = path.join(tmpDir, 'README.md');
-      if (!fs.existsSync(clonedReadmePath)) {
-        fail(`❌ README.md not found in git at tag ${tag}`);
-      }
-
-      const clonedReadme = fs.readFileSync(clonedReadmePath, 'utf8');
-      const clonedHash = computeReadmeHash(clonedReadme);
-
-      if (clonedHash !== manifest.hash) {
-        fail(`❌ Hash mismatch: git content does not match npm manifest`);
-      }
-
-      log.success(`🔒 Content hash verified: ${manifest.hash.slice(0, 12)}...`);
 
       const publicKeyPath = path.join(tmpDir, 'hipp.pub');
       if (!fs.existsSync(publicKeyPath)) {
@@ -501,6 +520,29 @@ async function runVerify(packageSpec) {
       }
 
       const publicKey = fs.readFileSync(publicKeyPath, 'utf8');
+
+      log.info(`🏗️  Staging git files...`);
+      const trackedFiles = getTrackedFilesFromDir(tmpDir);
+      copyTrackedFilesFromDir(stageDir, tmpDir, trackedFiles);
+
+      const stagedReadmePath = path.join(stageDir, 'README.md');
+      if (!fs.existsSync(stagedReadmePath)) {
+        fail(`❌ README.md not found in git at tag ${tag}`);
+      }
+
+      let stagedReadme = fs.readFileSync(stagedReadmePath, 'utf8');
+      const verifyBlock = '```npx @dk/hipp ' + pkgName + '@' + tag + '```';
+      const jsonMetaStr = '```json\n{\n  "origin": "' + originUrl + '",\n  "tag": "' + tag + '"\n}\n```';
+      stagedReadme = stagedReadme.trimEnd() + '\n\n' + jsonMetaStr + '\n\n' + verifyBlock + '\n';
+
+      const stagedHash = computeReadmeHash(stagedReadme);
+
+      if (stagedHash !== manifest.hash) {
+        fail(`❌ Hash mismatch: git content does not match npm manifest`);
+      }
+
+      log.success(`🔒 Content hash verified: ${manifest.hash.slice(0, 12)}...`);
+
       const signData = buildSignData(manifest.hash, originUrl, tag);
       const signatureValid = verifySignature(signData, manifest.signature, publicKey);
 
@@ -514,6 +556,7 @@ async function runVerify(packageSpec) {
       log.info(`📍 Tag: ${tag}`);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
+      fs.rmSync(stageDir, { recursive: true, force: true });
     }
   } finally {
     fs.rmSync(tarballPath, { recursive: true, force: true });
@@ -636,6 +679,10 @@ async function run() {
     if (fs.existsSync(stagedReadmePath)) {
       stagedReadme = fs.readFileSync(stagedReadmePath, 'utf8');
     }
+
+    const verifyBlock = '```npx @dk/hipp ' + pkg.name + '@' + version + '```';
+    const jsonMetaStr = '```json\n{\n  "origin": "' + provenance.remoteUrl + '",\n  "tag": "' + rawTag + '"\n}\n```';
+    stagedReadme = stagedReadme.trimEnd() + '\n\n' + jsonMetaStr + '\n\n' + verifyBlock + '\n';
 
     const readmeHash = computeReadmeHash(stagedReadme);
     const dataToSign = buildSignData(readmeHash, provenance.remoteUrl, rawTag);
