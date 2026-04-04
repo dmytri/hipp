@@ -160,3 +160,14 @@ PERFORMANCE OF THIS SOFTWARE.
 ```npx @dk/hipp @dk/hipp@0.1.10
 ```
 
+<!-- HIPP-META -->
+```json
+{
+  "origin": "git@github.com:dmytri/hipp.git",
+  "tag": "v0.1.11"
+}
+```
+
+```npx @dk/hipp @dk/hipp@0.1.11
+```
+<!-- /HIPP-META -->
