@@ -26,9 +26,24 @@ function git(args, options = {}) {
   }).trim();
 }
 
-function getVersionFromGit() {
+function runCmd(cmd, args, options = {}) {
+  const result = spawnSync(cmd, args, {
+    encoding: 'utf8',
+    stdio: ['pipe', 'pipe', 'pipe'],
+    ...options,
+  });
+
+  if (result.error) throw result.error;
+  return result;
+}
+
+function safeStageName(name) {
+  return name.replace(/[^a-zA-Z0-9._-]/g, '-');
+}
+
+function getVersionFromExactTagOnHead() {
   try {
-    const rawTag = git(['describe', '--tags', '--exact-match']);
+    const rawTag = git(['describe', '--tags', '--exact-match', 'HEAD']);
     if (!rawTag.startsWith('v')) {
       throw new Error(`tag "${rawTag}" must start with "v"`);
     }
@@ -36,9 +51,9 @@ function getVersionFromGit() {
     if (!clean) {
       throw new Error(`tag "${rawTag}" is not valid semver`);
     }
-    return clean;
+    return { rawTag, version: clean };
   } catch (err) {
-    fail(`❌ Integrity Error: ${err.message}`);
+    fail(`❌ Integrity Error: HEAD must have an exact v-prefixed semver tag. ${err.message}`);
   }
 }
 
@@ -57,13 +72,161 @@ function ensureCleanRepo(pkg) {
   }
 }
 
-function getTrackedFiles() {
-  const out = git(['ls-files', '-z']);
-  return out.split('\0').filter(Boolean);
+function ensureMutableRefPolicy() {
+  let branch;
+  try {
+    branch = git(['symbolic-ref', '--short', 'HEAD']);
+  } catch {
+    fail('❌ Ref Error: Detached HEAD is not allowed for publish.');
+  }
+
+  let upstream;
+  try {
+    upstream = git(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
+  } catch {
+    fail(`❌ Ref Error: Branch "${branch}" must track an upstream branch.`);
+  }
+
+  const head = git(['rev-parse', 'HEAD']);
+  const upstreamHead = git(['rev-parse', '@{u}']);
+
+  if (head !== upstreamHead) {
+    fail(`❌ Ref Error: HEAD (${head.slice(0, 12)}) must exactly match upstream (${upstream} ${upstreamHead.slice(0, 12)}).`);
+  }
+
+  return { branch, upstream, head };
 }
 
-function safeStageName(name) {
-  return name.replace(/[^a-zA-Z0-9._-]/g, '-');
+function ensureRemoteProvenance(rawTag, headSha) {
+  let remoteUrl;
+  try {
+    remoteUrl = git(['remote', 'get-url', 'origin']);
+  } catch {
+    fail('❌ Provenance Error: Remote "origin" is required.');
+  }
+
+  const tagObjectLocal = git(['rev-parse', rawTag]);
+  const tagCommitLocal = git(['rev-list', '-n', '1', rawTag]);
+
+  const remoteTagObject = git(['ls-remote', '--tags', 'origin', `refs/tags/${rawTag}`])
+    .split('\t')[0]
+    .trim();
+
+  const remoteTagCommit = git(['ls-remote', '--tags', 'origin', `refs/tags/${rawTag}^{}`])
+    .split('\t')[0]
+    .trim();
+
+  if (!remoteTagObject) {
+    fail(`❌ Provenance Error: Tag "${rawTag}" does not exist on origin (${remoteUrl}).`);
+  }
+
+  if (remoteTagObject !== tagObjectLocal) {
+    fail(`❌ Provenance Error: Local tag object for "${rawTag}" does not match origin.`);
+  }
+
+  if (remoteTagCommit && remoteTagCommit !== tagCommitLocal) {
+    fail(`❌ Provenance Error: Local tag target commit for "${rawTag}" does not match origin.`);
+  }
+
+  const remoteContains = runCmd('git', ['branch', '-r', '--contains', headSha], {
+    encoding: 'utf8',
+  });
+
+  if (remoteContains.status !== 0) {
+    fail('❌ Provenance Error: Could not verify remote containment for HEAD.');
+  }
+
+  const remoteBranches = remoteContains.stdout
+    .split('\n')
+    .map((s) => s.trim().replace(/^\* /, ''))
+    .filter(Boolean);
+
+  const onOrigin = remoteBranches.some((b) => b.startsWith('origin/'));
+  if (!onOrigin) {
+    fail('❌ Provenance Error: HEAD commit is not contained in any origin remote branch.');
+  }
+
+  return { remoteUrl };
+}
+
+function ensureLockIntegrity(pkg) {
+  const lockPath = path.join(process.cwd(), 'package-lock.json');
+  if (!fs.existsSync(lockPath)) {
+    fail('❌ Lock Error: package-lock.json is required.');
+  }
+
+  try {
+    git(['ls-files', '--error-unmatch', 'package-lock.json']);
+  } catch {
+    fail('❌ Lock Error: package-lock.json must be tracked by git.');
+  }
+
+  if (typeof pkg.packageManager !== 'string' || !/^npm@\d+\.\d+\.\d+$/.test(pkg.packageManager)) {
+    fail('❌ Lock Error: package.json must pin an exact npm packageManager version, e.g. "npm@10.9.2".');
+  }
+
+  const expectedNpm = pkg.packageManager.slice(4);
+  const actualNpm = runCmd('npm', ['--version']);
+
+  if (actualNpm.status !== 0) {
+    fail('❌ Lock Error: Could not determine npm version.');
+  }
+
+  const actualNpmVersion = actualNpm.stdout.trim();
+  if (actualNpmVersion !== expectedNpm) {
+    fail(`❌ Lock Error: npm version mismatch. Expected ${expectedNpm}, got ${actualNpmVersion}.`);
+  }
+
+  const pkgJsonRaw = fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8');
+  const lockJsonRaw = fs.readFileSync(lockPath, 'utf8');
+
+  let lock;
+  try {
+    lock = JSON.parse(lockJsonRaw);
+  } catch {
+    fail('❌ Lock Error: package-lock.json is not valid JSON.');
+  }
+
+  if (!lock.name || !lock.version) {
+    fail('❌ Lock Error: package-lock.json is missing top-level name/version.');
+  }
+
+  if (lock.name !== pkg.name) {
+    fail(`❌ Lock Error: package-lock.json name mismatch. Expected ${pkg.name}, got ${lock.name}.`);
+  }
+
+  // The placeholder version is allowed and expected before staging.
+  if (lock.version !== pkg.version) {
+    fail(`❌ Lock Error: package-lock.json version mismatch. Expected ${pkg.version}, got ${lock.version}.`);
+  }
+
+  const ciCheck = runCmd('npm', ['ci', '--ignore-scripts', '--dry-run'], {
+    cwd: process.cwd(),
+    env: { ...process.env, npm_config_fund: 'false', npm_config_audit: 'false' },
+  });
+
+  if (ciCheck.status !== 0) {
+    process.stderr.write(ciCheck.stderr || '');
+    fail('❌ Lock Error: `npm ci --ignore-scripts --dry-run` failed. Lockfile or dependency state is not trustworthy.');
+  }
+
+  return {
+    npmVersion: actualNpmVersion,
+    lockfileSha256: sha256(lockJsonRaw),
+    packageJsonSha256: sha256(pkgJsonRaw),
+  };
+}
+
+function getTrackedFiles() {
+  const out = execFileSync('git', ['ls-files', '-z'], {
+    encoding: 'buffer',
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+
+  return out
+    .toString('utf8')
+    .split('\0')
+    .filter(Boolean);
 }
 
 function copyTrackedFiles(stageDir, files) {
@@ -85,6 +248,11 @@ function copyTrackedFiles(stageDir, files) {
       fs.copyFileSync(src, dest);
     }
   }
+}
+
+function sha256(input) {
+  const crypto = require('crypto');
+  return crypto.createHash('sha256').update(input).digest('hex');
 }
 
 async function confirmPrompt(name, version) {
@@ -118,11 +286,17 @@ async function run() {
   const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
   ensureCleanRepo(pkg);
 
-  const version = getVersionFromGit();
+  const { rawTag, version } = getVersionFromExactTagOnHead();
+  const refInfo = ensureMutableRefPolicy();
+  const provenance = ensureRemoteProvenance(rawTag, refInfo.head);
+  const lockInfo = ensureLockIntegrity(pkg);
   const trackedFiles = getTrackedFiles();
 
   log.info('🚀 HIPP: High Integrity Package Publisher');
-  log.success(`🏷️  Git Tag Truth: v${version}`);
+  log.success(`🏷️  Git Tag Truth: ${rawTag}`);
+  log.success(`🌿 Ref Truth: ${refInfo.branch} == ${refInfo.upstream}`);
+  log.success(`🌍 Origin Truth: ${provenance.remoteUrl}`);
+  log.success(`🔒 Lock Truth: npm@${lockInfo.npmVersion}`);
 
   if (!skipPrompt) {
     const confirmed = await confirmPrompt(pkg.name, version);
@@ -150,6 +324,11 @@ async function run() {
     const result = spawnSync('npm', ['publish', ...npmArgs], {
       cwd: stageDir,
       stdio: 'inherit',
+      env: {
+        ...process.env,
+        npm_config_fund: 'false',
+        npm_config_audit: 'false',
+      },
     });
 
     if (result.error) {
@@ -181,11 +360,18 @@ Options:
 
 Integrity rules:
   - package.json version must be 0.0.0
+  - package-lock.json must exist, be tracked, and match package.json
+  - package.json must pin exact packageManager as npm@x.y.z
+  - local npm version must exactly match packageManager
+  - npm ci --ignore-scripts --dry-run must succeed
   - repository must be clean
+  - HEAD must be on a branch with an upstream
+  - HEAD must exactly match upstream
   - HEAD must have an exact v-prefixed semver tag
+  - the exact tag must exist on origin and match locally
+  - HEAD commit must be contained in an origin remote branch
   - only git-tracked files are staged
   - only staged package.json is rewritten`);
 } else {
   run();
 }
-
