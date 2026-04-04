@@ -123,46 +123,7 @@ function buildSignData(hash, origin, tag) {
   return `${hash}\n${origin}\n${tag}\n`;
 }
 
-const MANIFEST_START = '<!-- HIPP-MANIFEST -->';
-const MANIFEST_END = '<!-- /HIPP-MANIFEST -->';
-
-function appendManifestToReadme(readmeContent, manifest) {
-  return `${readmeContent}${MANIFEST_START}\n\`\`\`json\n${manifest}\n\`\`\`\n${MANIFEST_END}\n`;
-}
-
-function extractManifestFromReadme(readmeContent) {
-  const startIdx = readmeContent.indexOf(MANIFEST_START);
-  if (startIdx === -1) return null;
-  const endIdx = readmeContent.indexOf(MANIFEST_END, startIdx);
-  if (endIdx === -1) return null;
-  const content = readmeContent.slice(startIdx + MANIFEST_START.length, endIdx).trim();
-  const match = content.match(/^```json\n(.+)\n```$/s);
-  if (!match) return null;
-  return match[1];
-}
-
-function stripManifestFromReadme(readmeContent) {
-  const startIdx = readmeContent.indexOf(MANIFEST_START);
-  const endIdx = readmeContent.indexOf(MANIFEST_END, startIdx);
-  if (startIdx === -1 || endIdx === -1) return readmeContent;
-
-  const endLineIdx = readmeContent.indexOf('\n', endIdx);
-  const endOfManifest = endLineIdx !== -1 ? endLineIdx + 1 : readmeContent.length;
-
-  const beforeWithNewline = readmeContent.slice(0, startIdx);
-  const lastNewlineBefore = beforeWithNewline.lastIndexOf('\n');
-  const before = lastNewlineBefore !== -1 ? beforeWithNewline.slice(0, lastNewlineBefore) : beforeWithNewline;
-
-  const after = readmeContent.slice(endOfManifest);
-  return before + '\n' + after;
-}
-
-function computeReadmeHash(readmeContent) {
-  const stripped = stripManifestFromReadme(readmeContent);
-  return sha256(stripped);
-}
-
-function extractJsonMetaFromReadme(readmeContent) {
+function findLastJsonBlock(readmeContent) {
   const lines = readmeContent.split('\n');
   let jsonStart = -1;
   let braceCount = 0;
@@ -186,7 +147,7 @@ function extractJsonMetaFromReadme(readmeContent) {
         const jsonStr = lines.slice(jsonStart, i + 1).join('\n');
         try {
           const parsed = JSON.parse(jsonStr);
-          if (parsed.origin && parsed.tag) {
+          if (parsed.origin && parsed.tag && parsed.hash && parsed.signature) {
             lastValid = parsed;
           }
         } catch {
@@ -197,6 +158,14 @@ function extractJsonMetaFromReadme(readmeContent) {
     }
   }
   return lastValid;
+}
+
+function computeReadmeHash(readmeContent) {
+  const jsonBlock = findLastJsonBlock(readmeContent);
+  if (!jsonBlock) return sha256(readmeContent);
+  const jsonStr = JSON.stringify(jsonBlock, null, 2);
+  const beforeJson = readmeContent.split('```json')[0];
+  return sha256(beforeJson + '```json\n' + jsonStr + '\n```\n');
 }
 
 function safeStageName(name) {
@@ -490,23 +459,12 @@ async function runVerify(packageSpec) {
     }
 
     const stagedReadme = fs.readFileSync(stagedReadmePath, 'utf8');
-    const jsonMeta = extractJsonMetaFromReadme(stagedReadme);
-    if (!jsonMeta || !jsonMeta.origin || !jsonMeta.tag) {
-      fail(`❌ JSON meta (origin/tag) not found in README`);
+    const manifest = findLastJsonBlock(stagedReadme);
+    if (!manifest || !manifest.origin || !manifest.tag || !manifest.hash || !manifest.signature) {
+      fail(`❌ Manifest not found or invalid in README`);
     }
 
-    const manifestStr = extractManifestFromReadme(stagedReadme);
-    if (!manifestStr) {
-      fail(`❌ Manifest not found in README`);
-    }
-
-    const manifest = parseManifest(manifestStr);
-    if (!manifest || !manifest.hash || !manifest.signature) {
-      fail(`❌ Invalid manifest format`);
-    }
-
-    const originUrl = jsonMeta.origin;
-    const tag = jsonMeta.tag;
+    const { origin: originUrl, tag, hash: npmHash, signature } = manifest;
 
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `hipp-verify-git-`));
     const stageDir = fs.mkdtempSync(path.join(os.tmpdir(), `hipp-verify-stage-`));
@@ -531,21 +489,16 @@ async function runVerify(packageSpec) {
         fail(`❌ README.md not found in git at tag ${tag}`);
       }
 
-      let stagedReadme = fs.readFileSync(stagedReadmePath, 'utf8');
-      const verifyBlock = '```npx @dk/hipp ' + pkgName + '@' + tag + '```';
-      const jsonMetaStr = '```json\n{\n  "origin": "' + originUrl + '",\n  "tag": "' + tag + '"\n}\n```';
-      stagedReadme = stagedReadme.trimEnd() + '\n\n' + jsonMetaStr + '\n\n' + verifyBlock + '\n';
+      const stagedHash = sha256(fs.readFileSync(stagedReadmePath, 'utf8'));
 
-      const stagedHash = computeReadmeHash(stagedReadme);
-
-      if (stagedHash !== manifest.hash) {
+      if (stagedHash !== npmHash) {
         fail(`❌ Hash mismatch: git content does not match npm manifest`);
       }
 
-      log.success(`🔒 Content hash verified: ${manifest.hash.slice(0, 12)}...`);
+      log.success(`🔒 Content hash verified: ${npmHash.slice(0, 12)}...`);
 
-      const signData = buildSignData(manifest.hash, originUrl, tag);
-      const signatureValid = verifySignature(signData, manifest.signature, publicKey);
+      const signData = buildSignData(npmHash, originUrl, tag);
+      const signatureValid = verifySignature(signData, signature, publicKey);
 
       if (!signatureValid) {
         fail(`❌ Signature verification failed`);
@@ -653,15 +606,20 @@ async function run() {
       stagedReadme = fs.readFileSync(stagedReadmePath, 'utf8');
     }
 
-    const verifyBlock = '```npx @dk/hipp ' + pkg.name + '@' + version + '```';
-    const jsonMetaStr = '```json\n{\n  "origin": "' + provenance.remoteUrl + '",\n  "tag": "' + rawTag + '"\n}\n```';
-    stagedReadme = stagedReadme.trimEnd() + '\n\n' + jsonMetaStr + '\n\n' + verifyBlock + '\n';
+    stagedReadme = stagedReadme.trimEnd() + '\n\n';
 
-    const readmeHash = computeReadmeHash(stagedReadme);
+    const readmeHash = sha256(stagedReadme);
     const dataToSign = buildSignData(readmeHash, provenance.remoteUrl, rawTag);
     const signature = signContent(dataToSign, privateKey);
-    const manifest = createManifest(readmeHash, signature);
-    stagedReadme = appendManifestToReadme(stagedReadme, manifest);
+
+    const manifestJson = {
+      origin: provenance.remoteUrl,
+      tag: rawTag,
+      hash: readmeHash,
+      signature: signature,
+    };
+
+    stagedReadme += '```json\n' + JSON.stringify(manifestJson, null, 2) + '\n```\n';
 
     fs.writeFileSync(stagedReadmePath, stagedReadme);
 
