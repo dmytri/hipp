@@ -1,5 +1,5 @@
 {
-  "name": "hipp",
+  "name": "@dk/hipp",
   "version": "0.0.0",
   "description": "High Integrity Package Publisher",
   "main": "hipp.js",

@@ -47,7 +47,7 @@ This is the **HIPP Doctrine**.
 
 ```bash
 git tag v1.0.0
-npx hipp
+npx @dk/hipp
 ```
 
 HIPP will:
@@ -65,7 +65,7 @@ HIPP will:
 If you need to pass additional flags to npm publish (like access or a custom registry), use the -- separator:
 Bash
 
-`npx hipp -- --access public --tag beta`
+`npx @dk/hipp -- --access public --tag beta`
 
 
 ---
