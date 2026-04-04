@@ -108,12 +108,12 @@ function verifySignature(data, signature, publicKey) {
 }
 
 function createManifest(hash, signature) {
-  return Buffer.from(JSON.stringify({ hash, signature })).toString('base64');
+  return JSON.stringify({ hash, signature }, null, 2);
 }
 
-function parseManifest(manifestBase64) {
+function parseManifest(manifestStr) {
   try {
-    return JSON.parse(Buffer.from(manifestBase64, 'base64').toString('utf8'));
+    return JSON.parse(manifestStr);
   } catch {
     return null;
   }
@@ -127,7 +127,7 @@ const MANIFEST_START = '<!-- HIPP-MANIFEST -->';
 const MANIFEST_END = '<!-- /HIPP-MANIFEST -->';
 
 function appendManifestToReadme(readmeContent, manifest) {
-  return `${readmeContent}${MANIFEST_START}\`\`\`${manifest}\`\`\`${MANIFEST_END}\n`;
+  return `${readmeContent}${MANIFEST_START}\n\`\`\`json\n${manifest}\n\`\`\`\n${MANIFEST_END}\n`;
 }
 
 function extractManifestFromReadme(readmeContent) {
@@ -136,7 +136,7 @@ function extractManifestFromReadme(readmeContent) {
   const endIdx = readmeContent.indexOf(MANIFEST_END, startIdx);
   if (endIdx === -1) return null;
   const content = readmeContent.slice(startIdx + MANIFEST_START.length, endIdx).trim();
-  const match = content.match(/^```(.+)```$/s);
+  const match = content.match(/^```json\n(.+)\n```$/s);
   if (!match) return null;
   return match[1];
 }
@@ -160,6 +160,42 @@ function stripManifestFromReadme(readmeContent) {
 function computeReadmeHash(readmeContent) {
   const stripped = stripManifestFromReadme(readmeContent);
   return sha256(stripped);
+}
+
+function extractJsonMetaFromReadme(readmeContent) {
+  const lines = readmeContent.split('\n');
+  let jsonStart = -1;
+  let braceCount = 0;
+  let inJson = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line === '```json') {
+      jsonStart = i + 1;
+      inJson = true;
+      braceCount = 0;
+      continue;
+    }
+    if (inJson) {
+      for (const char of line) {
+        if (char === '{') braceCount++;
+        if (char === '}') braceCount--;
+      }
+      if (braceCount === 0 && line.includes('}')) {
+        const jsonStr = lines.slice(jsonStart, i + 1).join('\n');
+        try {
+          const parsed = JSON.parse(jsonStr);
+          if (parsed.origin && parsed.tag) {
+            return parsed;
+          }
+        } catch {
+          // continue searching
+        }
+        inJson = false;
+      }
+    }
+  }
+  return null;
 }
 
 function safeStageName(name) {
@@ -358,40 +394,74 @@ function copyTrackedFiles(stageDir, files) {
 }
 
 async function runVerify(packageSpec) {
-  const [pkgName, pkgVersion] = packageSpec.split('@');
+  let pkgName, pkgVersion;
+  if (packageSpec.startsWith('@')) {
+    const atIndex = packageSpec.indexOf('@', 1);
+    if (atIndex === -1) {
+      pkgName = packageSpec;
+      pkgVersion = undefined;
+    } else {
+      pkgName = packageSpec.slice(0, atIndex);
+      pkgVersion = packageSpec.slice(atIndex + 1);
+    }
+  } else {
+    const atIndex = packageSpec.indexOf('@');
+    if (atIndex === -1) {
+      pkgName = packageSpec;
+      pkgVersion = undefined;
+    } else {
+      pkgName = packageSpec.slice(0, atIndex);
+      pkgVersion = packageSpec.slice(atIndex + 1);
+    }
+  }
   log.info(`🔍 HIPP Verify: ${pkgName}${pkgVersion ? '@' + pkgVersion : ''}`);
 
-  const registryUrl = 'https://registry.npmjs.org';
-  const fetchUrl = `${registryUrl}/${encodeURIComponent(pkgName)}/${pkgVersion ? pkgVersion : 'latest'}`;
+  const registryUrl = `https://registry.npmjs.org/${encodeURIComponent(pkgName)}/${pkgVersion || 'latest'}`;
 
   log.info(`📦 Fetching from npm...`);
+  const registryJson = runCmd('curl', ['-s', '-L', registryUrl]);
   let tarballUrl;
   try {
-    const fetchResult = runCmd('curl', ['-s', '-L', '-w', '%{url_effective}', '-o', '/dev/null', fetchUrl]);
-    tarballUrl = fetchResult.stdout.trim();
+    const json = JSON.parse(registryJson.stdout.trim());
+    tarballUrl = json.dist.tarball;
   } catch {
-    fail(`❌ Failed to fetch package info for ${pkgName}`);
+    fail(`❌ Failed to parse npm registry response for ${pkgName}`);
   }
 
   const tarballPath = path.join(os.tmpdir(), `hipp-verify-${safeStageName(pkgName)}-tgz`);
+  const extractDir = path.join(os.tmpdir(), `hipp-verify-extract-${safeStageName(pkgName)}`);
+
   try {
-    log.info(`📦 Downloading tarball...`);
+    log.info(`📦 Downloading tarball from ${tarballUrl}...`);
     const curlResult = runCmd('curl', ['-s', '-L', '-o', tarballPath, tarballUrl]);
     if (curlResult.status !== 0) {
       fail(`❌ Failed to download tarball`);
     }
 
-    log.info(`📦 Extracting tarball...`);
-    runCmd('tar', ['-xzf', tarballPath, '-C', os.tmpdir()], { stdio: 'pipe' });
+    if (fs.existsSync(extractDir)) {
+      fs.rmSync(extractDir, { recursive: true });
+    }
+    fs.mkdirSync(extractDir, { recursive: true });
 
-    const packageDir = path.join(os.tmpdir(), 'package');
+    log.info(`📦 Extracting tarball...`);
+    const tarResult = spawnSync('tar', ['-xzf', tarballPath, '-C', extractDir], { encoding: 'utf8', stdio: 'pipe' });
+    if (tarResult.status !== 0) {
+      fail(`❌ Failed to extract tarball: ${tarResult.stderr}`);
+    }
+
+    const packageDir = path.join(extractDir, 'package');
     const stagedReadmePath = path.join(packageDir, 'README.md');
 
     if (!fs.existsSync(stagedReadmePath)) {
-      fail(`❌ README.md not found in package`);
+      fail(`❌ README.md not found in package at ${stagedReadmePath}`);
     }
 
     const stagedReadme = fs.readFileSync(stagedReadmePath, 'utf8');
+    const jsonMeta = extractJsonMetaFromReadme(stagedReadme);
+    if (!jsonMeta || !jsonMeta.origin || !jsonMeta.tag) {
+      fail(`❌ JSON meta (origin/tag) not found in README`);
+    }
+
     const manifestBase64 = extractManifestFromReadme(stagedReadme);
     if (!manifestBase64) {
       fail(`❌ Manifest not found in README`);
@@ -402,15 +472,12 @@ async function runVerify(packageSpec) {
       fail(`❌ Invalid manifest format`);
     }
 
-    log.info(`📦 Extracting tarball to staging...`);
-    runCmd('tar', ['-xzf', tarballPath, '-C', os.tmpdir()], { stdio: 'pipe' });
-
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `hipp-verify-git-`));
     try {
       log.info(`🌿 Fetching from git origin...`);
 
-      const originUrl = manifest.origin;
-      const tag = manifest.tag;
+      const originUrl = jsonMeta.origin;
+      const tag = jsonMeta.tag;
 
       git(['clone', '--branch', tag, '--depth', '1', originUrl, tmpDir], { stdio: 'pipe' });
 
@@ -450,9 +517,8 @@ async function runVerify(packageSpec) {
     }
   } finally {
     fs.rmSync(tarballPath, { recursive: true, force: true });
-    const packageExtractDir = path.join(os.tmpdir(), 'package');
-    if (fs.existsSync(packageExtractDir)) {
-      fs.rmSync(packageExtractDir, { recursive: true, force: true });
+    if (fs.existsSync(extractDir)) {
+      fs.rmSync(extractDir, { recursive: true, force: true });
     }
   }
 }
