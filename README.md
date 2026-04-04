@@ -99,18 +99,58 @@ npx @dk/hipp verify @dk/your-package[@version]
 
 ### How Verification Works
 
-1. **Fetch from npm**: Downloads the package tarball and extracts the manifest
-2. **Fetch from git**: Clones the repository at the tagged commit and extracts the public key
-3. **Hash Verification**: Computes the hash of the git content and compares with the manifest
-4. **Signature Verification**: Verifies the manifest signature using the public key
+**Step 1: Get manifest from npm**
 
-If both checks pass, you can be certain that:
-- The package contents in npm exactly match the git tag
-- The manifest was signed by the holder of the private key
+1. Fetch the package tarball from npm registry
+2. Extract the README from the tarball
+3. Parse the JSON manifest appended to the README
+
+The manifest contains:
+```json
+{
+  "origin": "git@github.com:dk/your-package.git",
+  "tag": "v1.0.0",
+  "hash": "<sha256-of-tarball>",
+  "signature": "<base64-ed25519-signature>"
+}
+```
+
+**Step 2: Clone git and stage**
+
+4. Clone the repository at the tagged commit (using origin/tag from manifest)
+5. Copy all tracked files to a staging directory
+
+**Step 3: Verify content integrity**
+
+6. Run `npm pack` in the staging directory
+7. Compute the SHA256 hash of the resulting tarball
+8. Compare this hash with the `hash` field from the npm manifest
+
+**If the hashes match**: The npm package exactly matches the git repository at the tagged commit.
+
+**Step 4: Verify signature authenticity**
+
+9. Read `hipp.pub` from the cloned repository at the tagged commit
+10. Verify the signature using the public key
+
+The signature was created by signing: `hash + "\n" + origin + "\n" + tag`
+
+**If the signature is valid**: The package was published by the holder of the private key matching `hipp.pub`.
+
+### What Verification Guarantees
+
+| Check | Guarantees |
+|-------|-----------|
+| **Hash match** | npm package content exactly matches git at the tagged commit |
+| **Signature valid** | Published by holder of the private key matching `hipp.pub` |
+
+This provides two independent guarantees:
+- **Integrity**: The code in npm is exactly what was in git at the tag
+- **Authenticity**: The publisher controls the private key for `hipp.pub`
 
 ### Integrity Rules
 
-HIPP enforces strict integrity rules:
+HIPP enforces strict integrity rules when publishing:
 
 - `package.json` version must be `0.0.0`
 - `package-lock.json` must exist and be tracked by git
@@ -148,26 +188,3 @@ INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
 LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
 OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
-
-
-```json
-{
-  "origin": "git@github.com:dmytri/hipp.git",
-  "tag": "v0.1.10"
-}
-```
-
-```npx @dk/hipp @dk/hipp@0.1.10
-```
-
-<!-- HIPP-META -->
-```json
-{
-  "origin": "git@github.com:dmytri/hipp.git",
-  "tag": "v0.1.11"
-}
-```
-
-```npx @dk/hipp @dk/hipp@0.1.11
-```
-<!-- /HIPP-META -->
