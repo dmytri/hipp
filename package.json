@@ -16,5 +16,8 @@
   "engines": {
     "node": ">=18.0.0"
   },
-  "license": "0BSD"
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "0BSD",
 }
