@@ -167,6 +167,7 @@ function extractJsonMetaFromReadme(readmeContent) {
   let jsonStart = -1;
   let braceCount = 0;
   let inJson = false;
+  let lastValid = null;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -186,7 +187,7 @@ function extractJsonMetaFromReadme(readmeContent) {
         try {
           const parsed = JSON.parse(jsonStr);
           if (parsed.origin && parsed.tag) {
-            return parsed;
+            lastValid = parsed;
           }
         } catch {
           // continue searching
@@ -195,7 +196,7 @@ function extractJsonMetaFromReadme(readmeContent) {
       }
     }
   }
-  return null;
+  return lastValid;
 }
 
 function safeStageName(name) {
