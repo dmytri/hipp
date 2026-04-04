@@ -565,9 +565,38 @@ async function run() {
     log.success('📝 hipp.pub committed.');
   }
 
+  const { rawTag, version } = getVersionFromExactTagOnHead();
+
+  const readmePath = path.join(process.cwd(), 'README.md');
+  if (fs.existsSync(readmePath)) {
+    const readme = fs.readFileSync(readmePath, 'utf8');
+    const originUrl = git(['remote', 'get-url', 'origin']);
+    const verifyCmd = `\`\`\`npx @dk/hipp ${pkg.name}@${version}\n\`\`\``;
+    const jsonMeta = `\n\`\`\`json\n{\n  "origin": "${originUrl}",\n  "tag": "${rawTag}"\n}\n\`\`\`\n\n${verifyCmd}\n`;
+
+    const metaStart = '<!-- HIPP-META -->';
+    const metaEnd = '<!-- /HIPP-META -->';
+    const hasMeta = readme.includes(metaStart);
+
+    let newReadme;
+    if (hasMeta) {
+      const start = readme.indexOf(metaStart);
+      const end = readme.indexOf(metaEnd, start);
+      newReadme = readme.slice(0, start) + jsonMeta + readme.slice(end + metaEnd.length);
+    } else {
+      newReadme = readme.trimEnd() + '\n\n<!-- HIPP-META -->' + jsonMeta + '<!-- /HIPP-META -->\n';
+    }
+
+    if (newReadme !== readme) {
+      fs.writeFileSync(readmePath, newReadme);
+      git(['add', 'README.md']);
+      git(['commit', '-m', `Add HIPP meta for ${pkg.name}@${rawTag}`]);
+      log.success('📝 README updated with HIPP meta.');
+    }
+  }
+
   ensureCleanRepo(pkg);
 
-  const { rawTag, version } = getVersionFromExactTagOnHead();
   const refInfo = ensureMutableRefPolicy();
   const provenance = ensureRemoteProvenance(rawTag, refInfo.head);
   const lockInfo = ensureLockIntegrity(pkg);
@@ -607,8 +636,6 @@ async function run() {
     if (fs.existsSync(stagedReadmePath)) {
       stagedReadme = fs.readFileSync(stagedReadmePath, 'utf8');
     }
-
-    stagedReadme += '\n```json\n{\n  "origin": "' + provenance.remoteUrl + '",\n  "tag": "' + rawTag + '"\n}\n```\n\n```npx @dk/hipp ' + pkg.name + '@' + version + '```\n\n';
 
     const readmeHash = computeReadmeHash(stagedReadme);
     const dataToSign = buildSignData(readmeHash, provenance.remoteUrl, rawTag);
