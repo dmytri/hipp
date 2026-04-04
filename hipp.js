@@ -5,6 +5,7 @@ const path = require('path');
 const semver = require('semver');
 const readline = require('readline');
 const os = require('os');
+const crypto = require('crypto');
 
 const log = {
   error: (msg) => console.error(`\x1b[31m${msg}\x1b[0m`),
@@ -35,6 +36,10 @@ function runCmd(cmd, args, options = {}) {
 
   if (result.error) throw result.error;
   return result;
+}
+
+function sha256(input) {
+  return crypto.createHash('sha256').update(input).digest('hex');
 }
 
 function safeStageName(name) {
@@ -161,22 +166,6 @@ function ensureLockIntegrity(pkg) {
     fail('❌ Lock Error: package-lock.json must be tracked by git.');
   }
 
-  if (typeof pkg.packageManager !== 'string' || !/^npm@\d+\.\d+\.\d+$/.test(pkg.packageManager)) {
-    fail('❌ Lock Error: package.json must pin an exact npm packageManager version, e.g. "npm@10.9.2".');
-  }
-
-  const expectedNpm = pkg.packageManager.slice(4);
-  const actualNpm = runCmd('npm', ['--version']);
-
-  if (actualNpm.status !== 0) {
-    fail('❌ Lock Error: Could not determine npm version.');
-  }
-
-  const actualNpmVersion = actualNpm.stdout.trim();
-  if (actualNpmVersion !== expectedNpm) {
-    fail(`❌ Lock Error: npm version mismatch. Expected ${expectedNpm}, got ${actualNpmVersion}.`);
-  }
-
   const pkgJsonRaw = fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8');
   const lockJsonRaw = fs.readFileSync(lockPath, 'utf8');
 
@@ -195,7 +184,6 @@ function ensureLockIntegrity(pkg) {
     fail(`❌ Lock Error: package-lock.json name mismatch. Expected ${pkg.name}, got ${lock.name}.`);
   }
 
-  // The placeholder version is allowed and expected before staging.
   if (lock.version !== pkg.version) {
     fail(`❌ Lock Error: package-lock.json version mismatch. Expected ${pkg.version}, got ${lock.version}.`);
   }
@@ -207,11 +195,10 @@ function ensureLockIntegrity(pkg) {
 
   if (ciCheck.status !== 0) {
     process.stderr.write(ciCheck.stderr || '');
-    fail('❌ Lock Error: `npm ci --ignore-scripts --dry-run` failed. Lockfile or dependency state is not trustworthy.');
+    fail('❌ Lock Error: `npm ci --ignore-scripts --dry-run` failed.');
   }
 
   return {
-    npmVersion: actualNpmVersion,
     lockfileSha256: sha256(lockJsonRaw),
     packageJsonSha256: sha256(pkgJsonRaw),
   };
@@ -248,11 +235,6 @@ function copyTrackedFiles(stageDir, files) {
       fs.copyFileSync(src, dest);
     }
   }
-}
-
-function sha256(input) {
-  const crypto = require('crypto');
-  return crypto.createHash('sha256').update(input).digest('hex');
 }
 
 async function confirmPrompt(name, version) {
@@ -296,7 +278,7 @@ async function run() {
   log.success(`🏷️  Git Tag Truth: ${rawTag}`);
   log.success(`🌿 Ref Truth: ${refInfo.branch} == ${refInfo.upstream}`);
   log.success(`🌍 Origin Truth: ${provenance.remoteUrl}`);
-  log.success(`🔒 Lock Truth: npm@${lockInfo.npmVersion}`);
+  log.success(`🔒 Lock Truth: ${lockInfo.lockfileSha256.slice(0, 12)}…`);
 
   if (!skipPrompt) {
     const confirmed = await confirmPrompt(pkg.name, version);
@@ -360,9 +342,7 @@ Options:
 
 Integrity rules:
   - package.json version must be 0.0.0
-  - package-lock.json must exist, be tracked, and match package.json
-  - package.json must pin exact packageManager as npm@x.y.z
-  - local npm version must exactly match packageManager
+  - package-lock.json must exist and be tracked
   - npm ci --ignore-scripts --dry-run must succeed
   - repository must be clean
   - HEAD must be on a branch with an upstream
