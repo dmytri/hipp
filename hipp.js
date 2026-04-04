@@ -160,12 +160,24 @@ function findLastJsonBlock(readmeContent) {
   return lastValid;
 }
 
-function computeReadmeHash(readmeContent) {
-  const jsonBlock = findLastJsonBlock(readmeContent);
-  if (!jsonBlock) return sha256(readmeContent);
-  const jsonStr = JSON.stringify(jsonBlock, null, 2);
-  const beforeJson = readmeContent.split('```json')[0];
-  return sha256(beforeJson + '```json\n' + jsonStr + '\n```\n');
+function packAndHash(stageDir) {
+  const result = spawnSync('npm', ['pack'], {
+    cwd: stageDir,
+    encoding: 'utf8',
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+
+  if (result.status !== 0) {
+    throw new Error(`npm pack failed: ${result.stderr}`);
+  }
+
+  const tarballName = result.stdout.trim().split('\n').pop();
+  const tarballPath = path.join(stageDir, tarballName);
+
+  const tarballContent = fs.readFileSync(tarballPath);
+  fs.unlinkSync(tarballPath);
+
+  return { tarballName, tarballHash: sha256(tarballContent) };
 }
 
 function safeStageName(name) {
@@ -484,14 +496,10 @@ async function runVerify(packageSpec) {
       const trackedFiles = getTrackedFilesFromDir(tmpDir);
       copyTrackedFilesFromDir(stageDir, tmpDir, trackedFiles);
 
-      const stagedReadmePath = path.join(stageDir, 'README.md');
-      if (!fs.existsSync(stagedReadmePath)) {
-        fail(`❌ README.md not found in git at tag ${tag}`);
-      }
+      log.info(`📦 Packing to verify content hash...`);
+      const { tarballHash } = packAndHash(stageDir);
 
-      const stagedHash = sha256(fs.readFileSync(stagedReadmePath, 'utf8'));
-
-      if (stagedHash !== npmHash) {
+      if (tarballHash !== npmHash) {
         fail(`❌ Hash mismatch: git content does not match npm manifest`);
       }
 
@@ -595,10 +603,9 @@ async function run() {
 
     const { privateKey } = loadOrGenerateKeys();
 
-    const stagedPkgPath = path.join(stageDir, 'package.json');
-    const stagedPkg = JSON.parse(fs.readFileSync(stagedPkgPath, 'utf8'));
-    stagedPkg.version = version;
-    fs.writeFileSync(stagedPkgPath, JSON.stringify(stagedPkg, null, 2) + '\n');
+    log.info(`📦 Packing to compute content hash...`);
+    const { tarballHash } = packAndHash(stageDir);
+    log.success(`🔒 Content hash: ${tarballHash.slice(0, 12)}...`);
 
     const stagedReadmePath = path.join(stageDir, 'README.md');
     let stagedReadme = '';
@@ -606,22 +613,23 @@ async function run() {
       stagedReadme = fs.readFileSync(stagedReadmePath, 'utf8');
     }
 
-    stagedReadme = stagedReadme.trimEnd() + '\n\n';
-
-    const readmeHash = sha256(stagedReadme);
-    const dataToSign = buildSignData(readmeHash, provenance.remoteUrl, rawTag);
+    const dataToSign = buildSignData(tarballHash, provenance.remoteUrl, rawTag);
     const signature = signContent(dataToSign, privateKey);
 
     const manifestJson = {
       origin: provenance.remoteUrl,
       tag: rawTag,
-      hash: readmeHash,
+      hash: tarballHash,
       signature: signature,
     };
 
-    stagedReadme += '```json\n' + JSON.stringify(manifestJson, null, 2) + '\n```\n';
-
+    stagedReadme = stagedReadme.trimEnd() + '\n\n```json\n' + JSON.stringify(manifestJson, null, 2) + '\n```\n';
     fs.writeFileSync(stagedReadmePath, stagedReadme);
+
+    const stagedPkgPath = path.join(stageDir, 'package.json');
+    const stagedPkg = JSON.parse(fs.readFileSync(stagedPkgPath, 'utf8'));
+    stagedPkg.version = version;
+    fs.writeFileSync(stagedPkgPath, JSON.stringify(stagedPkg, null, 2) + '\n');
 
     log.success('🔏 Manifest signed.');
 
