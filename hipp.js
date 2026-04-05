@@ -33,6 +33,14 @@ function getGitUserInfo() {
   return { name, email };
 }
 
+function sshToHttpsUrl(sshUrl) {
+  const match = sshUrl.match(/^git@([^:]+):(.+\.git)$/);
+  if (match) {
+    return `https://${match[1]}/${match[2]}`;
+  }
+  return sshUrl;
+}
+
 function runCmd(cmd, args, options = {}) {
   const result = spawnSync(cmd, args, {
     encoding: 'utf8',
@@ -650,11 +658,12 @@ async function run() {
     const revision = refInfo.head;
     const npmVersion = runCmd('npm', ['--version']).stdout.trim();
     const nodeVersion = process.version;
-    const dataToSign = buildSignData(tarballHash, provenance.remoteUrl, rawTag, revision, name, email);
+    const originUrl = sshToHttpsUrl(provenance.remoteUrl);
+    const dataToSign = buildSignData(tarballHash, originUrl, rawTag, revision, name, email);
     const signature = signContent(dataToSign, privateKey);
 
     const manifestJson = {
-      origin: provenance.remoteUrl,
+      origin: originUrl,
       tag: rawTag,
       revision: revision,
       hash: tarballHash,
