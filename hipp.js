@@ -218,9 +218,9 @@ function getVersionFromExactTagOnHead() {
   }
 }
 
-function ensureCleanRepo(pkg) {
-  if (pkg.version !== '0.0.0') {
-    fail('❌ Integrity Violation: package.json version must be 0.0.0');
+function ensureCleanRepo(pkg, tagVersion) {
+  if (pkg.version !== '0.0.0' && pkg.version !== tagVersion) {
+    fail(`❌ Integrity Violation: package.json version must be 0.0.0 or match the git tag (v${tagVersion})`);
   }
 
   if (pkg.workspaces) {
@@ -676,7 +676,7 @@ async function run() {
 
   const { rawTag, version } = getVersionFromExactTagOnHead();
 
-  ensureCleanRepo(pkg);
+  ensureCleanRepo(pkg, version);
 
   const refInfo = ensureMutableRefPolicy();
   const provenance = ensureRemoteProvenance(rawTag, refInfo.head);
@@ -796,14 +796,12 @@ if (isVerify) {
   if (!hasSelf) {
     try {
       const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'));
-      if (pkg.version === '0.0.0') {
-        const rawTag = git(['describe', '--tags', '--exact-match', 'HEAD']);
-        if (rawTag.startsWith('v')) {
-          const tagVersion = semver.clean(rawTag);
-          if (tagVersion) {
-            runVerify(`${pkg.name}@${tagVersion}`);
-            return;
-          }
+      const rawTag = git(['describe', '--tags', '--exact-match', 'HEAD']);
+      if (rawTag.startsWith('v')) {
+        const tagVersion = semver.clean(rawTag);
+        if (tagVersion && (pkg.version === '0.0.0' || pkg.version === tagVersion)) {
+          runVerify(`${pkg.name}@${tagVersion}`);
+          return;
         }
       }
     } catch {}
@@ -822,8 +820,8 @@ Usage:
   npx hipp verify [@package[@version]]
   npx hipp verify --self
 
-  Without arguments: in a hipp repo (package.json version 0.0.0 with a
-  semver tag on HEAD), verifies the published package at that version.
+  Without arguments: in a hipp repo (package.json version 0.0.0 or matching
+  a semver tag on HEAD), verifies the published package at that version.
   Otherwise verifies @dk/hipp itself.
   --self: always verifies @dk/hipp.
 
@@ -837,7 +835,7 @@ Verify: Downloads npm tarball, clones git at tag, runs all three verification ch
   3. Rebuild verification (npm tarball equals git rebuild with manifest+version)
 
 Integrity rules:
-  - package.json version must be 0.0.0
+  - package.json version must be 0.0.0 or match the git tag
   - package-lock.json must exist and be tracked
   - npm ci --ignore-scripts --dry-run must succeed
   - repository must be clean

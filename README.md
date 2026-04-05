@@ -4,7 +4,7 @@ By Dmytri Kleiner <dev@dmytri.to>
 
 **HIPP** is a minimalist, stateless publishing tool that eliminates version-bump
 commits and merge conflicts by treating Git Tags as the single source of truth.
-Your `package.json` version stays permanently at `0.0.0`.
+Your `package.json` version stays at `0.0.0` (or matches your latest tag).
 
 ---
 
@@ -22,10 +22,10 @@ This creates a **State Conflict**:
 
 ## The Solution
 
-**HIPP makes `package.json` version immutable (0.0.0)** - the **HIPP Doctrine**.
-
-Version is extracted directly from the Git Tag during publish. Your Git history
-stays clean, and your registry package is guaranteed to match your Git tag.
+**HIPP makes Git tags the source of truth** - the version is always extracted
+from the tag, not `package.json`. You can leave `package.json` at `0.0.0` (HIPP
+rewrites it during publish) or keep it in sync with your tag (HIPP verifies the
+match).
 
 ---
 
@@ -33,13 +33,14 @@ stays clean, and your registry package is guaranteed to match your Git tag.
 
 ### Setup
 
-1. Set your project's `package.json` version to `0.0.0`:
+Set your project's `package.json` version to `0.0.0`, or leave it in sync with
+your latest tag. The git tag is always the source of truth.
 
 ```json
 { "name": "your-package", "version": "0.0.0" }
 ```
 
-2. Ensure `package-lock.json` exists and is tracked by git.
+Ensure `package-lock.json` exists and is tracked by git.
 
 ### Tag and Publish
 
@@ -68,7 +69,7 @@ npx @dk/hipp -- --access public --tag beta
 HIPP will:
 
 1. **Key Generation**: Generate Ed25519 signing keys if needed (`hipp.priv`, `hipp.pub`)
-2. **Verify**: Ensure the `0.0.0` doctrine is being followed
+2. **Verify**: Ensure `package.json` version is `0.0.0` or matches the git tag
 3. **Clean Check**: Ensure your git status is clean
 4. **Validate**: Extract and verify the latest tag against Semver rules
 5. **Sign**: Create a cryptographic manifest of your package content
@@ -219,7 +220,7 @@ package, but only private key holders can publish.
 
 HIPP enforces strict integrity rules when publishing:
 
-- `package.json` version must be `0.0.0`
+- `package.json` version must be `0.0.0` or match the git tag
 - `package-lock.json` must exist and be tracked by git
 - `npm ci --ignore-scripts --dry-run` must succeed
 - Repository must be clean
