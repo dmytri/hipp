@@ -40,6 +40,9 @@ your latest tag. The git tag is always the source of truth.
 { "name": "your-package", "version": "0.0.0" }
 ```
 
+`0.0.0` is preferred — it eliminates version-bump commits and merge conflicts.
+If your tooling requires a real version, leave it in sync with your latest tag.
+
 Ensure `package-lock.json` exists and is tracked by git.
 
 ### Tag and Publish
