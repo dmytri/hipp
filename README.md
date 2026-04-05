@@ -6,6 +6,16 @@ By Dmytri Kleiner <dev@dmytri.to>
 commits and merge conflicts by treating Git Tags as the single source of truth.
 Your `package.json` version stays at `0.0.0` (or matches your latest tag).
 
+## TL;DR
+
+```bash
+git tag v1.0.0
+git push origin main --tags
+npx @dk/hipp
+```
+
+Your package is published with version `1.0.0`. No version-bump commits. No merge conflicts.
+
 ---
 
 ## The Problem
@@ -13,11 +23,11 @@ Your `package.json` version stays at `0.0.0` (or matches your latest tag).
 Traditional NPM versioning requires storing the "Version of Truth" in `package.json`.
 This creates a **State Conflict**:
 
-- `npm version` and `git tag` are two distinct, non-atomic actions
-- If you tag a commit but forget to update the JSON (or vice-versa), your
+- 🔄 `npm version` and `git tag` are two distinct, non-atomic actions
+- 🤷 If you tag a commit but forget to update the JSON (or vice-versa), your
   registry package and Git history diverge
-- Every release requires a "chore: bump version" commit
-- When multiple branches are developed simultaneously, these trivial changes
+- 🗑️ Every release requires a "chore: bump version" commit
+- 😫 When multiple branches are developed simultaneously, these trivial changes
   cause constant merge conflicts
 
 ## The Solution
@@ -70,15 +80,15 @@ Pass npm options via `--`:
 npx @dk/hipp -- --access public --tag beta
 ```
 
-HIPP will:
+### What Happens When You Run HIPP
 
-1. **Key Generation**: Generate Ed25519 signing keys if needed (`hipp.priv`, `hipp.pub`)
-2. **Verify**: Ensure `package.json` version is `0.0.0` or matches the git tag
-3. **Clean Check**: Ensure your git status is clean
-4. **Validate**: Extract and verify the latest tag against Semver rules
-5. **Sign**: Create a cryptographic manifest of your package content
-6. **Publish**: Publish to npm from a staging directory (never mutating your source)
-7. **Confirm**: Ask for confirmation before ignition (skip with `-y`)
+1. **Key Generation** - Generate Ed25519 signing keys if needed (`hipp.priv`, `hipp.pub`)
+2. **Verify** - Ensure `package.json` version is `0.0.0` or matches the git tag
+3. **Clean Check** - Ensure your git status is clean
+4. **Validate** - Extract and verify the latest tag against Semver rules
+5. **Sign** - Create a cryptographic manifest of your package content
+6. **Publish** - Publish to npm from a staging directory (never mutating your source)
+7. **Confirm** - Ask for confirmation before ignition (skip with `-y`)
 
 ### Signing Keys
 
@@ -90,15 +100,19 @@ On first run, HIPP generates an Ed25519 keypair:
 
 The private key holder can sign packages. The public key verifies signatures.
 
-**Key rotation**: Delete `hipp.pub` and run HIPP again. A new keypair will be
+#### Key Rotation
+
+Delete `hipp.pub` and run HIPP again. A new keypair will be
 generated and committed automatically. Verification uses the public key from
 the specific git revision at the tag, so previous packages remain verifiable
 with their original keys.
 
-**Multiple publishers**: Each developer can use their own private key. Delete
-`hipp.pub`, run HIPP, and a new keypair will be generated for that revision.
+#### Multiple Publishers
 
-### Why This Works
+Each developer can use their own private key. Delete `hipp.pub`, run HIPP, and
+a new keypair will be generated for that revision.
+
+#### Why This Works
 
 The public key in `hipp.pub` is committed to git at the specific revision of
 each release. Verification always uses the key from that historical revision,
@@ -111,7 +125,7 @@ not a current one. This means:
 
 ### Options
 
-* `-y, --yes`: Skip the confirmation prompt (ideal for CI/CD pipelines).
+- `-y, --yes` - Skip the confirmation prompt (ideal for CI/CD pipelines)
 
 To pass additional flags to npm publish (like access or a custom registry), use `--`:
 
@@ -134,12 +148,13 @@ npx @dk/hipp verify @scope/package@1.0.0   # verifies specific version
 
 ### How Verification Works
 
-**Step 1: Get manifest from npm**
+#### Step 1: Get Manifest from npm
 
 1. Fetch the package tarball from npm registry
 2. Extract the README and parse the JSON manifest appended to it
 
 The manifest contains:
+
 ```json
 {
   "origin": "git@github.com:dk/your-package.git",
@@ -156,7 +171,7 @@ The manifest contains:
 }
 ```
 
-**Step 2: Clone git and verify**
+#### Step 2: Clone Git and Verify
 
 3. Clone the repository at the tagged commit (using origin/tag from manifest)
 4. Verify the cloned commit hash matches the `revision` field in manifest
@@ -165,13 +180,13 @@ The manifest contains:
 7. Compute SHA256 hash of the clean tarball
 8. Compare with the `hash` field from the npm manifest
 
-**Step 3: Verify signature**
+#### Step 3: Verify Signature
 
 9. Read `hipp.pub` from the cloned repository
 10. Verify the signature was created by signing:
     `hash + "\n" + origin + "\n" + tag + "\n" + revision + "\n" + name + "\n" + email`
 
-**Step 4: Rebuild verification**
+#### Step 4: Rebuild Verification
 
 11. Append the manifest to the staged README
 12. Update the staged `package.json` version to match the tag
@@ -187,15 +202,15 @@ The manifest contains:
 
 ### What Verification Guarantees
 
-- **Integrity**: The code in npm exactly matches git at the tagged commit
-- **Authenticity**: The package was published by the holder of the private key
-- **Reproducibility**: The npm tarball is byte-for-byte identical to a git rebuild
+- **Integrity** - The code in npm exactly matches git at the tagged commit
+- **Authenticity** - The package was published by the holder of the private key
+- **Reproducibility** - The npm tarball is byte-for-byte identical to a git rebuild
 
 ### What Verification Does NOT Guarantee
 
-- **Code is safe or bug-free**: Malicious or buggy code can be signed
-- **Publisher is trustworthy**: The key holder could sign bad code intentionally
-- **Name/email is accurate**: These are read from local `git config` and could be set to anything
+- **Code is safe or bug-free** - Malicious or buggy code can be signed
+- **Publisher is trustworthy** - The key holder could sign bad code intentionally
+- **Name/email is accurate** - These are read from local `git config` and could be set to anything
 
 Verification proves that npm matches git - it says nothing about whether that
 code is correct or safe.
@@ -240,7 +255,7 @@ HIPP enforces strict integrity rules when publishing:
 
 ## License
 
-**0BSD** (BSD Zero Clause License)  By Dmytri Kleiner <dev@dmytri.to>
+**0BSD** (BSD Zero Clause License) By Dmytri Kleiner <dev@dmytri.to>
 
 Permission to use, copy, modify, and/or distribute this software for any
 purpose with or without fee is hereby granted.
