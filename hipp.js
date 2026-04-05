@@ -751,25 +751,40 @@ const verifyIndex = process.argv.indexOf('verify');
 const packageSpec = verifyIndex !== -1 ? process.argv[verifyIndex + 1] : null;
 
 if (isVerify) {
-  const specToVerify = packageSpec;
-  if (specToVerify) {
-    runVerify(specToVerify);
-  } else {
-    const hippPkgPath = path.join(path.dirname(process.argv[1]), 'package.json');
-    const hippPkg = JSON.parse(fs.readFileSync(hippPkgPath, 'utf8'));
-    const spec = hippPkg.version === '0.0.0'
-      ? hippPkg.name
-      : `${hippPkg.name}@${hippPkg.version}`;
-    runVerify(spec);
+  const hasSelf = process.argv.includes('--self');
+  if (!hasSelf) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'));
+      if (pkg.version === '0.0.0') {
+        const rawTag = git(['describe', '--tags', '--exact-match', 'HEAD']);
+        if (rawTag.startsWith('v')) {
+          const tagVersion = semver.clean(rawTag);
+          if (tagVersion) {
+            runVerify(`${pkg.name}@${tagVersion}`);
+            return;
+          }
+        }
+      }
+    } catch {}
   }
+  const hippPkgPath = path.join(path.dirname(process.argv[1]), 'package.json');
+  const hippPkg = JSON.parse(fs.readFileSync(hippPkgPath, 'utf8'));
+  const spec = hippPkg.version === '0.0.0'
+    ? hippPkg.name
+    : `${hippPkg.name}@${hippPkg.version}`;
+  runVerify(spec);
 } else if (process.argv.includes('--help') || process.argv.includes('-h')) {
   console.log(`\x1b[36mHIPP - High Integrity Package Publisher\x1b[0m
 
 Usage:
   npx hipp [options] [-- npm-options]
   npx hipp verify [@package[@version]]
+  npx hipp verify --self
 
-  Without arguments, verifies the installed hipp version.
+  Without arguments: in a hipp repo (package.json version 0.0.0 with a
+  semver tag on HEAD), verifies the published package at that version.
+  Otherwise verifies @dk/hipp itself.
+  --self: always verifies @dk/hipp.
 
 Options:
   -y, --yes   Skip confirmation prompt
