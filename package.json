@@ -11,6 +11,7 @@
   },
   "author": "Dmytri Kleiner <dev@dmytri.to>",
   "dependencies": {
+    "npm-package-arg": "^13.0.2",
     "semver": ">=7.6.0"
   },
   "engines": {

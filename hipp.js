@@ -408,33 +408,18 @@ function copyTrackedFilesFromDir(stageDir, repoDir, files) {
 }
 
 async function runVerify(packageSpec) {
-  let pkgName, pkgVersion;
-  if (packageSpec.startsWith('@')) {
-    const atIndex = packageSpec.indexOf('@', 1);
-    if (atIndex === -1) {
-      pkgName = packageSpec;
-      pkgVersion = undefined;
-    } else {
-      pkgName = packageSpec.slice(0, atIndex);
-      pkgVersion = packageSpec.slice(atIndex + 1);
-    }
-  } else {
-    const atIndex = packageSpec.indexOf('@');
-    if (atIndex === -1) {
-      pkgName = packageSpec;
-      pkgVersion = undefined;
-    } else {
-      pkgName = packageSpec.slice(0, atIndex);
-      pkgVersion = packageSpec.slice(atIndex + 1);
-    }
-  }
+  const npa = require('npm-package-arg');
+  const parsed = npa(packageSpec);
+  const pkgName = parsed.name;
+  const pkgVersion = parsed.fetchSpec;
   log.info(`🔍 HIPP Verify: ${pkgName}${pkgVersion ? '@' + pkgVersion : ''}`);
 
-  const registryUrl = `https://registry.npmjs.org/${encodeURIComponent(pkgName)}/${pkgVersion || 'latest'}`;
+  const registryUrl = `https://registry.npmjs.org/${parsed.escapedName}/${pkgVersion || 'latest'}`;
 
-  log.info(`📦 Fetching from npm...`);
+  log.info(`📦 Fetching manifest from npm...`);
   const registryJson = runCmd('curl', ['-s', '-L', registryUrl]);
   let tarballUrl;
+  let manifest;
   try {
     const json = JSON.parse(registryJson.stdout.trim());
     tarballUrl = json.dist.tarball;
@@ -452,6 +437,10 @@ async function runVerify(packageSpec) {
       fail(`❌ Failed to download tarball`);
     }
 
+    const npmTarballContent = fs.readFileSync(tarballPath);
+    const npmHash = sha256(npmTarballContent);
+    log.success(`📦 NPM tarball hash: ${npmHash.slice(0, 12)}...`);
+
     if (fs.existsSync(extractDir)) {
       fs.rmSync(extractDir, { recursive: true });
     }
@@ -464,25 +453,25 @@ async function runVerify(packageSpec) {
     }
 
     const packageDir = path.join(extractDir, 'package');
-    const stagedReadmePath = path.join(packageDir, 'README.md');
+    const npmReadmePath = path.join(packageDir, 'README.md');
 
-    if (!fs.existsSync(stagedReadmePath)) {
-      fail(`❌ README.md not found in package at ${stagedReadmePath}`);
+    if (!fs.existsSync(npmReadmePath)) {
+      fail(`❌ README.md not found in npm package`);
     }
 
-    const stagedReadme = fs.readFileSync(stagedReadmePath, 'utf8');
-    const manifest = findLastJsonBlock(stagedReadme);
+    const npmReadme = fs.readFileSync(npmReadmePath, 'utf8');
+    manifest = findLastJsonBlock(npmReadme);
     if (!manifest || !manifest.origin || !manifest.tag || !manifest.hash || !manifest.signature) {
       fail(`❌ Manifest not found or invalid in README`);
     }
 
-    const { origin: originUrl, tag, hash: npmHash, signature } = manifest;
+    const { origin: originUrl, tag, signature } = manifest;
 
+    log.info(`🌿 Cloning git origin at tag ${tag}...`);
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `hipp-verify-git-`));
     const stageDir = fs.mkdtempSync(path.join(os.tmpdir(), `hipp-verify-stage-`));
 
     try {
-      log.info(`🌿 Fetching from git origin at tag ${tag}...`);
       git(['clone', '--branch', tag, '--depth', '1', originUrl, tmpDir], { stdio: 'pipe' });
 
       const publicKeyPath = path.join(tmpDir, 'hipp.pub');
@@ -496,24 +485,51 @@ async function runVerify(packageSpec) {
       const trackedFiles = getTrackedFilesFromDir(tmpDir);
       copyTrackedFilesFromDir(stageDir, tmpDir, trackedFiles);
 
-      log.info(`📦 Packing to verify content hash...`);
-      const { tarballHash } = packAndHash(stageDir);
+      log.info(`📦 Packing clean git files...`);
+      const { tarballHash: cleanHash } = packAndHash(stageDir);
+      log.success(`📦 Clean hash: ${cleanHash.slice(0, 12)}...`);
 
-      if (tarballHash !== npmHash) {
-        fail(`❌ Hash mismatch: git content does not match npm manifest`);
+      log.info(`🔍 Check 2: Verifying manifest hash...`);
+      if (cleanHash !== manifest.hash) {
+        fail(`❌ Manifest hash mismatch: clean git tarball does not match manifest`);
       }
+      log.success(`🔒 Manifest hash verified`);
 
-      log.success(`🔒 Content hash verified: ${npmHash.slice(0, 12)}...`);
-
-      const signData = buildSignData(npmHash, originUrl, tag);
+      log.info(`🔍 Check 1: Verifying signature...`);
+      const signData = buildSignData(manifest.hash, originUrl, tag);
       const signatureValid = verifySignature(signData, signature, publicKey);
-
       if (!signatureValid) {
         fail(`❌ Signature verification failed`);
       }
-
       log.success(`🔏 Signature verified`);
-      log.success(`✅ Package ${pkgName} verified successfully!`);
+
+      log.info(`🔍 Check 3: Rebuilding from source...`);
+      const stagedReadmePath = path.join(stageDir, 'README.md');
+      let stagedReadme = fs.readFileSync(stagedReadmePath, 'utf8');
+      stagedReadme = stagedReadme.trimEnd() + '\n\n```json\n' + JSON.stringify(manifest, null, 2) + '\n```\n';
+      fs.writeFileSync(stagedReadmePath, stagedReadme);
+
+      const stagedPkgPath = path.join(stageDir, 'package.json');
+      const stagedPkg = JSON.parse(fs.readFileSync(stagedPkgPath, 'utf8'));
+      const tagVersion = semver.clean(tag);
+      if (!tagVersion) {
+        fail(`❌ Tag ${tag} is not valid semver`);
+      }
+      stagedPkg.version = tagVersion;
+      fs.writeFileSync(stagedPkgPath, JSON.stringify(stagedPkg, null, 2) + '\n');
+
+      const { tarballHash: rebuildHash } = packAndHash(stageDir);
+      log.success(`📦 Rebuild hash: ${rebuildHash.slice(0, 12)}...`);
+
+      if (rebuildHash !== npmHash) {
+        log.error(`❌ Rebuild mismatch!`);
+        log.error(`   NPM tarball:  ${npmHash}`);
+        log.error(`   Git rebuild:  ${rebuildHash}`);
+        fail(`❌ Package integrity compromised`);
+      }
+      log.success(`🔄 Rebuild verified`);
+
+      log.success(`✅ Verified: all checks passed`);
       log.info(`📍 Origin: ${originUrl}`);
       log.info(`📍 Tag: ${tag}`);
     } finally {
@@ -666,18 +682,30 @@ const isVerify = process.argv.includes('verify');
 const verifyIndex = process.argv.indexOf('verify');
 const packageSpec = verifyIndex !== -1 ? process.argv[verifyIndex + 1] : null;
 
-if (isVerify && packageSpec) {
-  runVerify(packageSpec);
+if (isVerify) {
+  const specToVerify = packageSpec || (() => {
+    const hippPkgPath = path.join(path.dirname(process.argv[1]), 'package.json');
+    const hippPkg = JSON.parse(fs.readFileSync(hippPkgPath, 'utf8'));
+    return `${hippPkg.name}@${hippPkg.version}`;
+  })();
+  runVerify(specToVerify);
 } else if (process.argv.includes('--help') || process.argv.includes('-h')) {
   console.log(`\x1b[36mHIPP - High Integrity Package Publisher\x1b[0m
 
 Usage:
   npx hipp [options] [-- npm-options]
-  npx hipp verify <package>[@version]
+  npx hipp verify [@package[@version]]
+
+  Without arguments, verifies the installed hipp version.
 
 Options:
   -y, --yes   Skip confirmation prompt
   -h, --help  Show this help
+
+Verify: Downloads npm tarball, clones git at tag, runs all three verification checks:
+  1. Signature verification (manifest signed by private key)
+  2. Manifest hash (clean git tarball matches manifest hash)
+  3. Rebuild verification (npm tarball equals git rebuild with manifest+version)
 
 Integrity rules:
   - package.json version must be 0.0.0
