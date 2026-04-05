@@ -27,6 +27,12 @@ function git(args, options = {}) {
   }).trim();
 }
 
+function getGitUserInfo() {
+  const name = git(['config', 'user.name']);
+  const email = git(['config', 'user.email']);
+  return { name, email };
+}
+
 function runCmd(cmd, args, options = {}) {
   const result = spawnSync(cmd, args, {
     encoding: 'utf8',
@@ -64,10 +70,18 @@ function loadOrGenerateKeys() {
   const pubPath = getPublicKeyPath();
 
   if (fs.existsSync(privPath) && fs.existsSync(pubPath)) {
-    return {
-      privateKey: fs.readFileSync(privPath, 'utf8'),
-      publicKey: fs.readFileSync(pubPath, 'utf8'),
-    };
+    const privateKey = fs.readFileSync(privPath, 'utf8');
+    const publicKey = fs.readFileSync(pubPath, 'utf8');
+
+    const testData = 'hipp-key-validation';
+    const testSignature = signContent(testData, privateKey);
+    const valid = verifySignature(testData, testSignature, publicKey);
+
+    if (valid) {
+      return { privateKey, publicKey };
+    }
+
+    log.warn('⚠️  Key mismatch detected. Generating new keypair...');
   }
 
   log.info('🔑 Generating Ed25519 keypair...');
@@ -107,8 +121,8 @@ function verifySignature(data, signature, publicKey) {
   }, Buffer.from(signature, 'base64'));
 }
 
-function buildSignData(hash, origin, tag) {
-  return `${hash}\n${origin}\n${tag}\n`;
+function buildSignData(hash, origin, tag, name, email) {
+  return `${hash}\n${origin}\n${tag}\n${name}\n${email}\n`;
 }
 
 function findLastJsonBlock(readmeContent) {
@@ -449,11 +463,11 @@ async function runVerify(packageSpec) {
 
     const npmReadme = fs.readFileSync(npmReadmePath, 'utf8');
     manifest = findLastJsonBlock(npmReadme);
-    if (!manifest || !manifest.origin || !manifest.tag || !manifest.hash || !manifest.signature) {
+    if (!manifest || !manifest.origin || !manifest.tag || !manifest.hash || !manifest.signature || !manifest.name || !manifest.email) {
       fail(`❌ Manifest not found or invalid in README`);
     }
 
-    const { origin: originUrl, tag, signature } = manifest;
+    const { origin: originUrl, tag, signature, name, email } = manifest;
 
     log.info(`🌿 Cloning git origin at tag ${tag}...`);
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `hipp-verify-git-`));
@@ -484,7 +498,7 @@ async function runVerify(packageSpec) {
       log.success(`🔒 Manifest hash verified`);
 
       log.info(`🔍 Check 1: Verifying signature...`);
-      const signData = buildSignData(manifest.hash, originUrl, tag);
+      const signData = buildSignData(manifest.hash, originUrl, tag, name, email);
       const signatureValid = verifySignature(signData, signature, publicKey);
       if (!signatureValid) {
         fail(`❌ Signature verification failed`);
@@ -518,6 +532,7 @@ async function runVerify(packageSpec) {
       log.success(`🔄 Rebuild verified`);
 
       log.success(`✅ Verified: all checks passed`);
+      log.info(`📍 Publisher: ${name} <${email}>`);
       log.info(`📍 Origin: ${originUrl}`);
       log.info(`📍 Tag: ${tag}`);
     } finally {
@@ -617,7 +632,8 @@ async function run() {
       stagedReadme = fs.readFileSync(stagedReadmePath, 'utf8');
     }
 
-    const dataToSign = buildSignData(tarballHash, provenance.remoteUrl, rawTag);
+    const { name, email } = getGitUserInfo();
+    const dataToSign = buildSignData(tarballHash, provenance.remoteUrl, rawTag, name, email);
     const signature = signContent(dataToSign, privateKey);
 
     const manifestJson = {
@@ -625,6 +641,8 @@ async function run() {
       tag: rawTag,
       hash: tarballHash,
       signature: signature,
+      name: name,
+      email: email,
     };
 
     stagedReadme = stagedReadme.trimEnd() + '\n\n```json\n' + JSON.stringify(manifestJson, null, 2) + '\n```\n';

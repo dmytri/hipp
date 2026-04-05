@@ -68,6 +68,14 @@ On first run, HIPP generates an Ed25519 keypair:
 
 The private key holder can sign packages. The public key verifies signatures.
 
+**Key rotation**: Delete `hipp.pub` and run HIPP again. A new keypair will be
+generated and committed automatically. Verification uses the public key from
+the specific git revision at the tag, so previous packages remain verifiable
+with their original keys.
+
+**Multiple publishers**: Each developer can use their own private key. Delete
+`hipp.pub`, run HIPP, and a new keypair will be generated for that revision.
+
 ### Options
 
 * `-y, --yes`: Skip the confirmation prompt (ideal for CI/CD pipelines).
@@ -102,7 +110,9 @@ The manifest contains:
   "origin": "git@github.com:dk/your-package.git",
   "tag": "v1.0.0",
   "hash": "<sha256-of-tarball>",
-  "signature": "<base64-ed25519-signature>"
+  "signature": "<base64-ed25519-signature>",
+  "name": "Jane Developer",
+  "email": "jane@example.com"
 }
 ```
 
@@ -118,7 +128,7 @@ The manifest contains:
 
 8. Read `hipp.pub` from the cloned repository
 9. Verify the signature was created by signing:
-   `hash + "\n" + origin + "\n" + tag`
+   `hash + "\n" + origin + "\n" + tag + "\n" + name + "\n" + email`
 
 **Step 4: Rebuild verification**
 
@@ -144,10 +154,9 @@ The manifest contains:
 
 - **Code is safe or bug-free**: Malicious or buggy code can be signed
 - **Publisher is trustworthy**: The key holder could sign bad code intentionally
-- **Suitability**: The package may not be appropriate for your use case
 
 Verification proves that npm matches git - it says nothing about whether that
-code is correct, safe, or suitable.
+code is correct or safe.
 
 ---
 
