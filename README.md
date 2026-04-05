@@ -93,6 +93,17 @@ with their original keys.
 **Multiple publishers**: Each developer can use their own private key. Delete
 `hipp.pub`, run HIPP, and a new keypair will be generated for that revision.
 
+### Why This Works
+
+The public key in `hipp.pub` is committed to git at the specific revision of
+each release. Verification always uses the key from that historical revision,
+not a current one. This means:
+
+- You don't need to retain your private key — once published, past releases are
+  verifiable from the git history alone
+- A compromised private key can only sign future releases, not forge past ones
+- Multiple publishers work naturally because each release is self-contained
+
 ### Options
 
 * `-y, --yes`: Skip the confirmation prompt (ideal for CI/CD pipelines).

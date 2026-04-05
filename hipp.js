@@ -525,6 +525,8 @@ async function runVerify(packageSpec) {
       } else {
         const publicKey = fs.readFileSync(publicKeyPath, 'utf8');
 
+        log.info(`🔑 Public key: hipp.pub from git@rev ${revision.slice(0, 12)} at tag ${tag}`);
+
         log.info(`🏗️  Staging git files...`);
         const trackedFiles = getTrackedFilesFromDir(tmpDir);
         copyTrackedFilesFromDir(stageDir, tmpDir, trackedFiles);
