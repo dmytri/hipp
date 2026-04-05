@@ -429,7 +429,7 @@ async function runVerify(packageSpec) {
   const npa = require('npm-package-arg');
   const parsed = npa(packageSpec);
   const pkgName = parsed.name;
-  const pkgVersion = parsed.fetchSpec;
+  const pkgVersion = parsed.fetchSpec === '*' ? null : parsed.fetchSpec;
   log.info(`🔍 HIPP Verify: ${pkgName}${pkgVersion ? '@' + pkgVersion : ''}`);
 
   const registryUrl = `https://registry.npmjs.org/${parsed.escapedName}/${pkgVersion || 'latest'}`;
@@ -757,7 +757,10 @@ if (isVerify) {
   } else {
     const hippPkgPath = path.join(path.dirname(process.argv[1]), 'package.json');
     const hippPkg = JSON.parse(fs.readFileSync(hippPkgPath, 'utf8'));
-    runVerify(`${hippPkg.name}@${hippPkg.version}`);
+    const spec = hippPkg.version === '0.0.0'
+      ? hippPkg.name
+      : `${hippPkg.name}@${hippPkg.version}`;
+    runVerify(spec);
   }
 } else if (process.argv.includes('--help') || process.argv.includes('-h')) {
   console.log(`\x1b[36mHIPP - High Integrity Package Publisher\x1b[0m

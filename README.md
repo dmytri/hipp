@@ -110,8 +110,9 @@ npx @dk/hipp -- --access public --tag beta
 HIPP provides out-of-band verification to prove package integrity:
 
 ```bash
-npx @dk/hipp verify @dk/your-package[@version]
-npx @dk/hipp verify           # verifies the installed hipp version
+npx @dk/hipp verify                       # verifies latest @dk/hipp
+npx @dk/hipp verify @scope/package         # verifies latest of a package
+npx @dk/hipp verify @scope/package@1.0.0   # verifies specific version
 ```
 
 ### How Verification Works
