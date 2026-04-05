@@ -41,6 +41,14 @@ function sshToHttpsUrl(sshUrl) {
   return sshUrl;
 }
 
+function httpsToSshUrl(httpsUrl) {
+  const match = httpsUrl.match(/^https:\/\/([^/]+)\/(.+)$/);
+  if (match) {
+    return `git@${match[1]}:${match[2]}`;
+  }
+  return httpsUrl;
+}
+
 function runCmd(cmd, args, options = {}) {
   const result = spawnSync(cmd, args, {
     encoding: 'utf8',
@@ -482,7 +490,18 @@ async function runVerify(packageSpec) {
     const stageDir = fs.mkdtempSync(path.join(os.tmpdir(), `hipp-verify-stage-`));
 
     try {
-      git(['clone', '--branch', tag, '--depth', '1', originUrl, tmpDir], { stdio: 'pipe' });
+      let cloneResult;
+      try {
+        cloneResult = git(['clone', '--branch', tag, '--depth', '1', originUrl, tmpDir], { stdio: 'pipe' });
+      } catch (cloneErr) {
+        if (originUrl.startsWith('git@')) {
+          const httpsUrl = sshToHttpsUrl(originUrl);
+          log.info(`🌿 SSH clone failed, trying HTTPS: ${httpsUrl}...`);
+          cloneResult = git(['clone', '--branch', tag, '--depth', '1', httpsUrl, tmpDir], { stdio: 'pipe' });
+        } else {
+          throw cloneErr;
+        }
+      }
 
       const clonedRevision = git(['rev-parse', 'HEAD'], { cwd: tmpDir });
       if (clonedRevision !== revision) {
@@ -658,7 +677,7 @@ async function run() {
     const revision = refInfo.head;
     const npmVersion = runCmd('npm', ['--version']).stdout.trim();
     const nodeVersion = process.version;
-    const originUrl = sshToHttpsUrl(provenance.remoteUrl);
+    const originUrl = provenance.remoteUrl;
     const dataToSign = buildSignData(tarballHash, originUrl, rawTag, revision, name, email);
     const signature = signContent(dataToSign, privateKey);
 
