@@ -575,7 +575,8 @@ async function runVerify(packageSpec) {
       log.info(`📍 Tag: ${tag}`);
       if (npmVer || nodeVer || hippVer) {
         const parts = [];
-        if (hippVer) parts.push(`hipp: ${hippVer}`);
+        const displayHipp = hippVer === '0.0.0' ? tagVersion : hippVer;
+        if (hippVer) parts.push(`hipp: ${displayHipp}`);
         if (npmVer) parts.push(`npm: ${npmVer}`);
         if (nodeVer) parts.push(`node: ${nodeVer}`);
         log.info(`ℹ️  ${parts.join(' | ')}`);
