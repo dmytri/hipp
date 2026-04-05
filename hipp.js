@@ -483,11 +483,19 @@ async function runVerify(packageSpec) {
       fail(`❌ Manifest not found or invalid in README`);
     }
 
-    const { origin: originUrl, tag, revision, signature, name, email, npm: npmVer, node: nodeVer, hipp: hippVer } = manifest;
+    const { origin: originUrl, tag, revision, signature, name, email, npm: npmVer, node: nodeVer, hipp: hippVer, git: gitVer } = manifest;
 
     log.info(`🌿 Cloning git origin at tag ${tag}...`);
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `hipp-verify-git-`));
     const stageDir = fs.mkdtempSync(path.join(os.tmpdir(), `hipp-verify-stage-`));
+
+    const results = {
+      revision: false,
+      pub: false,
+      signature: false,
+      manifestHash: false,
+      rebuild: false,
+    };
 
     try {
       let cloneResult;
@@ -505,81 +513,110 @@ async function runVerify(packageSpec) {
 
       const clonedRevision = git(['rev-parse', 'HEAD'], { cwd: tmpDir });
       if (clonedRevision !== revision) {
-        fail(`❌ Revision mismatch: manifest claims ${revision.slice(0, 12)} but tag points to ${clonedRevision.slice(0, 12)}`);
+        log.error(`❌ Revision mismatch: manifest ${revision.slice(0, 12)} != cloned ${clonedRevision.slice(0, 12)}`);
+      } else {
+        log.success(`🏷️  Revision verified: ${revision.slice(0, 12)}...`);
+        results.revision = true;
       }
-      log.success(`🏷️  Revision verified: ${revision.slice(0, 12)}...`);
 
       const publicKeyPath = path.join(tmpDir, 'hipp.pub');
       if (!fs.existsSync(publicKeyPath)) {
-        fail(`❌ hipp.pub not found in git at tag ${tag}`);
+        log.error(`❌ hipp.pub not found in git at tag ${tag}`);
+      } else {
+        const publicKey = fs.readFileSync(publicKeyPath, 'utf8');
+
+        log.info(`🏗️  Staging git files...`);
+        const trackedFiles = getTrackedFilesFromDir(tmpDir);
+        copyTrackedFilesFromDir(stageDir, tmpDir, trackedFiles);
+
+        log.info(`📦 Packing clean git files...`);
+        const { tarballHash: cleanHash } = packAndHash(stageDir);
+        log.success(`📦 Clean hash: ${cleanHash.slice(0, 12)}...`);
+
+        log.info(`🔍 Check 2: Verifying manifest hash...`);
+        if (cleanHash !== manifest.hash) {
+          log.error(`❌ Manifest hash mismatch: clean ${cleanHash.slice(0, 12)} != manifest ${manifest.hash.slice(0, 12)}`);
+        } else {
+          log.success(`🔒 Manifest hash verified`);
+          results.manifestHash = true;
+        }
+
+        log.info(`🔍 Check 1: Verifying signature...`);
+        const signData = buildSignData(manifest.hash, originUrl, tag, revision, name, email);
+        const signatureValid = verifySignature(signData, signature, publicKey);
+        if (!signatureValid) {
+          log.error(`❌ Signature verification failed`);
+        } else {
+          log.success(`🔏 Signature verified`);
+          results.signature = true;
+          results.pub = true;
+        }
+
+        log.info(`🔍 Check 3: Rebuilding from source...`);
+        const stagedReadmePath = path.join(stageDir, 'README.md');
+        let stagedReadme = fs.readFileSync(stagedReadmePath, 'utf8');
+        const tagVersion = semver.clean(tag);
+        if (!tagVersion) {
+          log.error(`❌ Tag ${tag} is not valid semver`);
+        }
+        stagedReadme = stagedReadme.trimEnd() + '\n\n## Verify\n\n' +
+          'Verify this package with [@dk/hipp](https://www.npmjs.com/package/@dk/hipp):\n\n' +
+          '```bash\n' +
+          `npx @dk/hipp verify ${pkgName}@${tagVersion}\n` +
+          '```\n\n' +
+          '```json\n' + JSON.stringify(manifest, null, 2) + '\n```\n';
+        fs.writeFileSync(stagedReadmePath, stagedReadme);
+
+        const stagedPkgPath = path.join(stageDir, 'package.json');
+        const stagedPkg = JSON.parse(fs.readFileSync(stagedPkgPath, 'utf8'));
+        stagedPkg.version = tagVersion;
+        fs.writeFileSync(stagedPkgPath, JSON.stringify(stagedPkg, null, 2) + '\n');
+
+        const { tarballHash: rebuildHash } = packAndHash(stageDir);
+        log.success(`📦 Rebuild hash: ${rebuildHash.slice(0, 12)}...`);
+
+        if (rebuildHash !== npmHash) {
+          log.error(`❌ Rebuild mismatch: rebuild ${rebuildHash.slice(0, 12)} != npm ${npmHash.slice(0, 12)}`);
+        } else {
+          log.success(`🔄 Rebuild verified`);
+          results.rebuild = true;
+        }
       }
 
-      const publicKey = fs.readFileSync(publicKeyPath, 'utf8');
+      const allPassed = results.revision && results.pub && results.signature && results.manifestHash && results.rebuild;
 
-      log.info(`🏗️  Staging git files...`);
-      const trackedFiles = getTrackedFilesFromDir(tmpDir);
-      copyTrackedFilesFromDir(stageDir, tmpDir, trackedFiles);
-
-      log.info(`📦 Packing clean git files...`);
-      const { tarballHash: cleanHash } = packAndHash(stageDir);
-      log.success(`📦 Clean hash: ${cleanHash.slice(0, 12)}...`);
-
-      log.info(`🔍 Check 2: Verifying manifest hash...`);
-      if (cleanHash !== manifest.hash) {
-        fail(`❌ Manifest hash mismatch: clean git tarball does not match manifest`);
-      }
-      log.success(`🔒 Manifest hash verified`);
-
-      log.info(`🔍 Check 1: Verifying signature...`);
-      const signData = buildSignData(manifest.hash, originUrl, tag, revision, name, email);
-      const signatureValid = verifySignature(signData, signature, publicKey);
-      if (!signatureValid) {
-        fail(`❌ Signature verification failed`);
-      }
-      log.success(`🔏 Signature verified`);
-
-      log.info(`🔍 Check 3: Rebuilding from source...`);
-      const stagedReadmePath = path.join(stageDir, 'README.md');
-      let stagedReadme = fs.readFileSync(stagedReadmePath, 'utf8');
-      const tagVersion = semver.clean(tag);
-      if (!tagVersion) {
-        fail(`❌ Tag ${tag} is not valid semver`);
-      }
-      stagedReadme = stagedReadme.trimEnd() + '\n\n## Verify\n\n' +
-        'Verify this package with [@dk/hipp](https://www.npmjs.com/package/@dk/hipp):\n\n' +
-        '```bash\n' +
-        `npx @dk/hipp verify ${pkgName}@${tagVersion}\n` +
-        '```\n\n' +
-        '```json\n' + JSON.stringify(manifest, null, 2) + '\n```\n';
-      fs.writeFileSync(stagedReadmePath, stagedReadme);
-
-      const stagedPkgPath = path.join(stageDir, 'package.json');
-      const stagedPkg = JSON.parse(fs.readFileSync(stagedPkgPath, 'utf8'));
-      stagedPkg.version = tagVersion;
-      fs.writeFileSync(stagedPkgPath, JSON.stringify(stagedPkg, null, 2) + '\n');
-
-      const { tarballHash: rebuildHash } = packAndHash(stageDir);
-      log.success(`📦 Rebuild hash: ${rebuildHash.slice(0, 12)}...`);
-
-      if (rebuildHash !== npmHash) {
-        log.error(`❌ Rebuild mismatch!`);
-        log.error(`   NPM tarball:  ${npmHash}`);
-        log.error(`   Git rebuild:  ${rebuildHash}`);
-        fail(`❌ Package integrity compromised`);
-      }
-      log.success(`🔄 Rebuild verified`);
-
-      log.success(`✅ Verified: all checks passed`);
-      log.info(`📍 Publisher: ${name} <${email}>`);
-      log.info(`📍 Origin: ${originUrl}`);
-      log.info(`📍 Tag: ${tag}`);
-      if (npmVer || nodeVer || hippVer) {
-        const parts = [];
-        const displayHipp = hippVer === '0.0.0' ? tagVersion : hippVer;
-        if (hippVer) parts.push(`hipp: ${displayHipp}`);
-        if (npmVer) parts.push(`npm: ${npmVer}`);
-        if (nodeVer) parts.push(`node: ${nodeVer}`);
-        log.info(`ℹ️  ${parts.join(' | ')}`);
+      if (allPassed) {
+        log.success(`\n✅ Verified: all checks passed`);
+        log.info(`📍 Publisher: ${name} <${email}>`);
+        log.info(`📍 Origin: ${originUrl}`);
+        log.info(`📍 Tag: ${tag}`);
+        if (npmVer || nodeVer || hippVer || gitVer) {
+          const parts = [];
+          const displayHipp = hippVer === '0.0.0' ? tagVersion : hippVer;
+          if (hippVer) parts.push(`hipp: ${displayHipp}`);
+          if (npmVer) parts.push(`npm: ${npmVer}`);
+          if (nodeVer) parts.push(`node: ${nodeVer}`);
+          if (gitVer) parts.push(`git: ${gitVer}`);
+          log.info(`ℹ️  ${parts.join(' | ')}`);
+        }
+        log.info(`\nThis proves npm matches git. It does NOT prove:`);
+        log.info(`  - The code is safe or bug-free`);
+        log.info(`  - The publisher is trustworthy`);
+        log.info(`  - The name/email is accurate`);
+      } else {
+        log.error(`\n❌ Verification failed.`);
+        if (results.revision && results.pub && results.signature) {
+          log.info(`\nRevision and signature verified. This failure may be due to tool`);
+          log.info(`version differences between publishing and verification environments.`);
+          if (npmVer || nodeVer || hippVer || gitVer) {
+            log.info(`\nPublished with: ${[
+              hippVer && `hipp: ${hippVer}`,
+              npmVer && `npm: ${npmVer}`,
+              nodeVer && `node: ${nodeVer}`,
+              gitVer && `git: ${gitVer}`,
+            ].filter(Boolean).join(' | ')}`);
+          }
+        }
       }
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -682,6 +719,7 @@ async function run() {
     const revision = refInfo.head;
     const npmVersion = runCmd('npm', ['--version']).stdout.trim();
     const nodeVersion = process.version;
+    const gitVersion = runCmd('git', ['--version']).stdout.trim();
     const hippPkgPath = path.join(path.dirname(process.argv[1]), 'package.json');
     const hippPkg = JSON.parse(fs.readFileSync(hippPkgPath, 'utf8'));
     const hippVersion = hippPkg.version === '0.0.0' ? version : hippPkg.version;
@@ -699,6 +737,7 @@ async function run() {
       email: email,
       npm: npmVersion,
       node: nodeVersion,
+      git: gitVersion,
       hipp: hippVersion,
     };
 

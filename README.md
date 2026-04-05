@@ -135,6 +135,7 @@ The manifest contains:
   "email": "jane@example.com",
   "npm": "10.2.4",
   "node": "v20.11.0",
+  "git": "2.34.1",
   "hipp": "0.1.22"
 }
 ```
