@@ -178,25 +178,24 @@ function findLastJsonBlock(readmeContent) {
   return lastValid;
 }
 
-function hashFiles(dir) {
-  const entries = [];
-  const walk = (d, prefix = '') => {
-    const items = fs.readdirSync(d);
-    for (const item of items.sort()) {
-      if (item === 'node_modules' || item === '.git' || item === 'hipp.priv') continue;
-      const full = path.join(d, item);
-      const rel = prefix ? prefix + '/' + item : item;
-      const stat = fs.statSync(full);
-      if (stat.isDirectory()) {
-        walk(full, rel);
-      } else {
-        const content = fs.readFileSync(full);
-        entries.push(rel + ':' + sha256(content));
-      }
-    }
-  };
-  walk(dir);
-  return sha256(entries.join('\n'));
+function packAndHash(stageDir) {
+  const result = spawnSync('npm', ['pack'], {
+    cwd: stageDir,
+    encoding: 'utf8',
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+
+  if (result.status !== 0) {
+    throw new Error(`npm pack failed: ${result.stderr}`);
+  }
+
+  const tarballName = result.stdout.trim().split('\n').pop();
+  const tarballPath = path.join(stageDir, tarballName);
+
+  const tarballContent = fs.readFileSync(tarballPath);
+  fs.unlinkSync(tarballPath);
+
+  return { tarballName, tarballHash: sha256(tarballContent) };
 }
 
 function safeStageName(name) {
@@ -456,6 +455,10 @@ async function runVerify(packageSpec) {
       fail(`❌ Failed to download tarball`);
     }
 
+    const npmTarballContent = fs.readFileSync(tarballPath);
+    const npmHash = sha256(npmTarballContent);
+    log.success(`📦 NPM tarball hash: ${npmHash.slice(0, 12)}...`);
+
     if (fs.existsSync(extractDir)) {
       fs.rmSync(extractDir, { recursive: true });
     }
@@ -528,8 +531,8 @@ async function runVerify(packageSpec) {
         const trackedFiles = getTrackedFilesFromDir(tmpDir);
         copyTrackedFilesFromDir(stageDir, tmpDir, trackedFiles);
 
-        log.info(`📦 Computing logical hash of git files...`);
-        const cleanHash = hashFiles(stageDir);
+        log.info(`📦 Packing clean git files...`);
+        const { tarballHash: cleanHash } = packAndHash(stageDir);
         log.success(`📦 Clean hash: ${cleanHash.slice(0, 12)}...`);
 
         log.info(`🔍 Check 2: Verifying manifest hash...`);
@@ -568,22 +571,14 @@ async function runVerify(packageSpec) {
 
         const stagedPkgPath = path.join(stageDir, 'package.json');
         const stagedPkg = JSON.parse(fs.readFileSync(stagedPkgPath, 'utf8'));
+        stagedPkg.version = tagVersion;
         fs.writeFileSync(stagedPkgPath, JSON.stringify(stagedPkg, null, 2) + '\n');
 
-        const npmExtractPkgPath = path.join(packageDir, 'package.json');
-        const npmExtractPkg = JSON.parse(fs.readFileSync(npmExtractPkgPath, 'utf8'));
-        if (stagedPkg.version === '0.0.0') {
-          npmExtractPkg.version = '0.0.0';
-          fs.writeFileSync(npmExtractPkgPath, JSON.stringify(npmExtractPkg, null, 2) + '\n');
-        }
+        const { tarballHash: rebuildHash } = packAndHash(stageDir);
+        log.success(`📦 Rebuild hash: ${rebuildHash.slice(0, 12)}...`);
 
-        const npmExtractHash = hashFiles(packageDir);
-        const rebuildHash = hashFiles(stageDir);
-        log.success(`📦 NPM-extract hash: ${npmExtractHash.slice(0, 12)}...`);
-        log.success(`📦 Git-rebuild hash: ${rebuildHash.slice(0, 12)}...`);
-
-        if (rebuildHash !== npmExtractHash) {
-          log.error(`❌ Rebuild mismatch: git ${rebuildHash.slice(0, 12)} != npm ${npmExtractHash.slice(0, 12)}`);
+        if (rebuildHash !== npmHash) {
+          log.error(`❌ Rebuild mismatch: rebuild ${rebuildHash.slice(0, 12)} != npm ${npmHash.slice(0, 12)}`);
         } else {
           log.success(`🔄 Rebuild verified`);
           results.rebuild = true;
@@ -712,9 +707,9 @@ async function run() {
 
     const { privateKey } = loadOrGenerateKeys();
 
-    log.info(`📦 Computing logical hash...`);
-    const logicalHash = hashFiles(stageDir);
-    log.success(`🔒 Content hash: ${logicalHash.slice(0, 12)}...`);
+    log.info(`📦 Packing to compute content hash...`);
+    const { tarballHash } = packAndHash(stageDir);
+    log.success(`🔒 Content hash: ${tarballHash.slice(0, 12)}...`);
 
     const stagedReadmePath = path.join(stageDir, 'README.md');
     let stagedReadme = '';
@@ -731,14 +726,14 @@ async function run() {
     const hippPkg = JSON.parse(fs.readFileSync(hippPkgPath, 'utf8'));
     const hippVersion = hippPkg.version === '0.0.0' ? version : hippPkg.version;
     const originUrl = provenance.remoteUrl;
-    const dataToSign = buildSignData(logicalHash, originUrl, rawTag, revision, name, email);
+    const dataToSign = buildSignData(tarballHash, originUrl, rawTag, revision, name, email);
     const signature = signContent(dataToSign, privateKey);
 
     const manifestJson = {
       origin: originUrl,
       tag: rawTag,
       revision: revision,
-      hash: logicalHash,
+      hash: tarballHash,
       signature: signature,
       name: name,
       email: email,
