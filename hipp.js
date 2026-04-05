@@ -564,7 +564,7 @@ async function runVerify(packageSpec) {
         stagedReadme = stagedReadme.trimEnd() + '\n\n## Verify\n\n' +
           'Verify this package with [@dk/hipp](https://www.npmjs.com/package/@dk/hipp):\n\n' +
           '```bash\n' +
-          `npx @dk/hipp verify ${pkgName}@${tagVersion}\n` +
+          `npx @dk/hipp --verify ${pkgName}@${tagVersion}\n` +
           '```\n\n' +
           '```json\n' + JSON.stringify(manifest, null, 2) + '\n```\n';
         fs.writeFileSync(stagedReadmePath, stagedReadme);
@@ -746,7 +746,7 @@ async function run() {
     stagedReadme = stagedReadme.trimEnd() + '\n\n## Verify\n\n' +
       'Verify this package with [@dk/hipp](https://www.npmjs.com/package/@dk/hipp):\n\n' +
       '```bash\n' +
-      `npx @dk/hipp verify ${pkg.name}@${version}\n` +
+      `npx @dk/hipp --verify ${pkg.name}@${version}\n` +
       '```\n\n' +
       '```json\n' + JSON.stringify(manifestJson, null, 2) + '\n```\n';
     fs.writeFileSync(stagedReadmePath, stagedReadme);
@@ -787,8 +787,8 @@ async function run() {
   }
 }
 
-const isVerify = process.argv.includes('verify');
-const verifyIndex = process.argv.indexOf('verify');
+const isVerify = process.argv.includes('--verify');
+const verifyIndex = process.argv.indexOf('--verify');
 const packageSpec = verifyIndex !== -1 ? process.argv[verifyIndex + 1] : null;
 
 if (isVerify) {
@@ -817,8 +817,8 @@ if (isVerify) {
 
 Usage:
   npx hipp [options] [-- npm-options]
-  npx hipp verify [@package[@version]]
-  npx hipp verify --self
+  npx hipp --verify [@package[@version]]
+  npx hipp --verify --self
 
   Without arguments: in a hipp repo (package.json version 0.0.0 or matching
   a semver tag on HEAD), verifies the published package at that version.
