@@ -109,32 +109,36 @@ The manifest contains:
 {
   "origin": "git@github.com:dk/your-package.git",
   "tag": "v1.0.0",
+  "revision": "<git-commit-hash>",
   "hash": "<sha256-of-tarball>",
   "signature": "<base64-ed25519-signature>",
   "name": "Jane Developer",
-  "email": "jane@example.com"
+  "email": "jane@example.com",
+  "npm": "10.2.4",
+  "node": "v20.11.0"
 }
 ```
 
 **Step 2: Clone git and verify**
 
 3. Clone the repository at the tagged commit (using origin/tag from manifest)
-4. Stage all tracked files
-5. Run `npm pack` to create a tarball
-6. Compute SHA256 hash of the clean tarball
-7. Compare with the `hash` field from the npm manifest
+4. Verify the cloned commit hash matches the `revision` field in manifest
+5. Stage all tracked files
+6. Run `npm pack` to create a tarball
+7. Compute SHA256 hash of the clean tarball
+8. Compare with the `hash` field from the npm manifest
 
 **Step 3: Verify signature**
 
-8. Read `hipp.pub` from the cloned repository
-9. Verify the signature was created by signing:
-   `hash + "\n" + origin + "\n" + tag + "\n" + name + "\n" + email`
+9. Read `hipp.pub` from the cloned repository
+10. Verify the signature was created by signing:
+    `hash + "\n" + origin + "\n" + tag + "\n" + revision + "\n" + name + "\n" + email`
 
 **Step 4: Rebuild verification**
 
-10. Append the manifest to the staged README
-11. Update the staged `package.json` version to match the tag
-12. Run `npm pack` again and verify the hash matches the npm tarball
+11. Append the manifest to the staged README
+12. Update the staged `package.json` version to match the tag
+13. Run `npm pack` again and verify the hash matches the npm tarball
 
 ### Three Verification Checks
 

@@ -121,8 +121,8 @@ function verifySignature(data, signature, publicKey) {
   }, Buffer.from(signature, 'base64'));
 }
 
-function buildSignData(hash, origin, tag, name, email) {
-  return `${hash}\n${origin}\n${tag}\n${name}\n${email}\n`;
+function buildSignData(hash, origin, tag, revision, name, email) {
+  return `${hash}\n${origin}\n${tag}\n${revision}\n${name}\n${email}\n`;
 }
 
 function findLastJsonBlock(readmeContent) {
@@ -463,11 +463,11 @@ async function runVerify(packageSpec) {
 
     const npmReadme = fs.readFileSync(npmReadmePath, 'utf8');
     manifest = findLastJsonBlock(npmReadme);
-    if (!manifest || !manifest.origin || !manifest.tag || !manifest.hash || !manifest.signature || !manifest.name || !manifest.email) {
+    if (!manifest || !manifest.origin || !manifest.tag || !manifest.revision || !manifest.hash || !manifest.signature || !manifest.name || !manifest.email) {
       fail(`❌ Manifest not found or invalid in README`);
     }
 
-    const { origin: originUrl, tag, signature, name, email } = manifest;
+    const { origin: originUrl, tag, revision, signature, name, email, npm: npmVer, node: nodeVer } = manifest;
 
     log.info(`🌿 Cloning git origin at tag ${tag}...`);
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `hipp-verify-git-`));
@@ -475,6 +475,12 @@ async function runVerify(packageSpec) {
 
     try {
       git(['clone', '--branch', tag, '--depth', '1', originUrl, tmpDir], { stdio: 'pipe' });
+
+      const clonedRevision = git(['rev-parse', 'HEAD'], { cwd: tmpDir });
+      if (clonedRevision !== revision) {
+        fail(`❌ Revision mismatch: manifest claims ${revision.slice(0, 12)} but tag points to ${clonedRevision.slice(0, 12)}`);
+      }
+      log.success(`🏷️  Revision verified: ${revision.slice(0, 12)}...`);
 
       const publicKeyPath = path.join(tmpDir, 'hipp.pub');
       if (!fs.existsSync(publicKeyPath)) {
@@ -498,7 +504,7 @@ async function runVerify(packageSpec) {
       log.success(`🔒 Manifest hash verified`);
 
       log.info(`🔍 Check 1: Verifying signature...`);
-      const signData = buildSignData(manifest.hash, originUrl, tag, name, email);
+      const signData = buildSignData(manifest.hash, originUrl, tag, revision, name, email);
       const signatureValid = verifySignature(signData, signature, publicKey);
       if (!signatureValid) {
         fail(`❌ Signature verification failed`);
@@ -540,6 +546,9 @@ async function runVerify(packageSpec) {
       log.info(`📍 Publisher: ${name} <${email}>`);
       log.info(`📍 Origin: ${originUrl}`);
       log.info(`📍 Tag: ${tag}`);
+      if (npmVer && nodeVer) {
+        log.info(`ℹ️  npm: ${npmVer} | node: ${nodeVer}`);
+      }
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
       fs.rmSync(stageDir, { recursive: true, force: true });
@@ -638,16 +647,22 @@ async function run() {
     }
 
     const { name, email } = getGitUserInfo();
-    const dataToSign = buildSignData(tarballHash, provenance.remoteUrl, rawTag, name, email);
+    const revision = refInfo.head;
+    const npmVersion = runCmd('npm', ['--version']).stdout.trim();
+    const nodeVersion = process.version;
+    const dataToSign = buildSignData(tarballHash, provenance.remoteUrl, rawTag, revision, name, email);
     const signature = signContent(dataToSign, privateKey);
 
     const manifestJson = {
       origin: provenance.remoteUrl,
       tag: rawTag,
+      revision: revision,
       hash: tarballHash,
       signature: signature,
       name: name,
       email: email,
+      npm: npmVersion,
+      node: nodeVersion,
     };
 
     stagedReadme = stagedReadme.trimEnd() + '\n\n## Verify\n\n' +
