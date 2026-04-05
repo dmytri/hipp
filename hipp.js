@@ -508,15 +508,20 @@ async function runVerify(packageSpec) {
       log.info(`🔍 Check 3: Rebuilding from source...`);
       const stagedReadmePath = path.join(stageDir, 'README.md');
       let stagedReadme = fs.readFileSync(stagedReadmePath, 'utf8');
-      stagedReadme = stagedReadme.trimEnd() + '\n\n```json\n' + JSON.stringify(manifest, null, 2) + '\n```\n';
-      fs.writeFileSync(stagedReadmePath, stagedReadme);
-
-      const stagedPkgPath = path.join(stageDir, 'package.json');
-      const stagedPkg = JSON.parse(fs.readFileSync(stagedPkgPath, 'utf8'));
       const tagVersion = semver.clean(tag);
       if (!tagVersion) {
         fail(`❌ Tag ${tag} is not valid semver`);
       }
+      stagedReadme = stagedReadme.trimEnd() + '\n\n## Verify\n\n' +
+        'Verify this package with [@dk/hipp](https://www.npmjs.com/package/@dk/hipp):\n\n' +
+        '```bash\n' +
+        `npx @dk/hipp verify ${pkgName}@${tagVersion}\n` +
+        '```\n\n' +
+        '```json\n' + JSON.stringify(manifest, null, 2) + '\n```\n';
+      fs.writeFileSync(stagedReadmePath, stagedReadme);
+
+      const stagedPkgPath = path.join(stageDir, 'package.json');
+      const stagedPkg = JSON.parse(fs.readFileSync(stagedPkgPath, 'utf8'));
       stagedPkg.version = tagVersion;
       fs.writeFileSync(stagedPkgPath, JSON.stringify(stagedPkg, null, 2) + '\n');
 
@@ -645,7 +650,12 @@ async function run() {
       email: email,
     };
 
-    stagedReadme = stagedReadme.trimEnd() + '\n\n```json\n' + JSON.stringify(manifestJson, null, 2) + '\n```\n';
+    stagedReadme = stagedReadme.trimEnd() + '\n\n## Verify\n\n' +
+      'Verify this package with [@dk/hipp](https://www.npmjs.com/package/@dk/hipp):\n\n' +
+      '```bash\n' +
+      `npx @dk/hipp verify ${pkg.name}@${version}\n` +
+      '```\n\n' +
+      '```json\n' + JSON.stringify(manifestJson, null, 2) + '\n```\n';
     fs.writeFileSync(stagedReadmePath, stagedReadme);
 
     const stagedPkgPath = path.join(stageDir, 'package.json');
