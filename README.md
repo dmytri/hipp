@@ -44,8 +44,25 @@ stays clean, and your registry package is guaranteed to match your Git tag.
 ### Tag and Publish
 
 ```bash
+git commit -m "Release"
 git tag v1.0.0
+git push origin main --tags
 npx @dk/hipp
+```
+
+The tag and commit **must be pushed to origin** before running HIPP. HIPP verifies the
+tag exists on the remote and that HEAD matches the upstream branch.
+
+Use `-y` to skip confirmation (for CI):
+
+```bash
+npx @dk/hipp --yes
+```
+
+Pass npm options via `--`:
+
+```bash
+npx @dk/hipp -- --access public --tag beta
 ```
 
 HIPP will:
@@ -115,7 +132,8 @@ The manifest contains:
   "name": "Jane Developer",
   "email": "jane@example.com",
   "npm": "10.2.4",
-  "node": "v20.11.0"
+  "node": "v20.11.0",
+  "hipp": "0.1.22"
 }
 ```
 

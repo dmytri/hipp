@@ -483,7 +483,7 @@ async function runVerify(packageSpec) {
       fail(`❌ Manifest not found or invalid in README`);
     }
 
-    const { origin: originUrl, tag, revision, signature, name, email, npm: npmVer, node: nodeVer } = manifest;
+    const { origin: originUrl, tag, revision, signature, name, email, npm: npmVer, node: nodeVer, hipp: hippVer } = manifest;
 
     log.info(`🌿 Cloning git origin at tag ${tag}...`);
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `hipp-verify-git-`));
@@ -573,8 +573,12 @@ async function runVerify(packageSpec) {
       log.info(`📍 Publisher: ${name} <${email}>`);
       log.info(`📍 Origin: ${originUrl}`);
       log.info(`📍 Tag: ${tag}`);
-      if (npmVer && nodeVer) {
-        log.info(`ℹ️  npm: ${npmVer} | node: ${nodeVer}`);
+      if (npmVer || nodeVer || hippVer) {
+        const parts = [];
+        if (hippVer) parts.push(`hipp: ${hippVer}`);
+        if (npmVer) parts.push(`npm: ${npmVer}`);
+        if (nodeVer) parts.push(`node: ${nodeVer}`);
+        log.info(`ℹ️  ${parts.join(' | ')}`);
       }
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -677,6 +681,9 @@ async function run() {
     const revision = refInfo.head;
     const npmVersion = runCmd('npm', ['--version']).stdout.trim();
     const nodeVersion = process.version;
+    const hippPkgPath = path.join(path.dirname(process.argv[1]), 'package.json');
+    const hippPkg = JSON.parse(fs.readFileSync(hippPkgPath, 'utf8'));
+    const hippVersion = hippPkg.version;
     const originUrl = provenance.remoteUrl;
     const dataToSign = buildSignData(tarballHash, originUrl, rawTag, revision, name, email);
     const signature = signContent(dataToSign, privateKey);
@@ -691,6 +698,7 @@ async function run() {
       email: email,
       npm: npmVersion,
       node: nodeVersion,
+      hipp: hippVersion,
     };
 
     stagedReadme = stagedReadme.trimEnd() + '\n\n## Verify\n\n' +
