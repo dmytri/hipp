@@ -2,40 +2,30 @@
 
 By Dmytri Kleiner <dev@dmytri.to>
 
-**HIPP** is a minimalist, stateless publishing tool designed to eliminate the
-friction of version-bump commits. It treats your **Git Tags** as the single
-source of truth, enforcing a "Ground State" where your `package.json` version
-remains permanently at `0.0.0`.
-
-HIPP provides **cryptographic signing** and **out-of-band verification** to
-guarantee that the package in the npm registry exactly matches your git tag.
+**HIPP** is a minimalist, stateless publishing tool that eliminates version-bump
+commits and merge conflicts by treating Git Tags as the single source of truth.
+Your `package.json` version stays permanently at `0.0.0`.
 
 ---
 
-## Why HIPP?
+## The Problem
 
-### Integrity
+Traditional NPM versioning requires storing the "Version of Truth" in `package.json`.
+This creates a **State Conflict**:
 
-Traditional NPM versioning requires you to store your "Version of Truth" inside
-your source code files (`package.json`). This creates a **State Conflict** that
-leads to several systemic problems:
+- `npm version` and `git tag` are two distinct, non-atomic actions
+- If you tag a commit but forget to update the JSON (or vice-versa), your
+  registry package and Git history diverge
+- Every release requires a "chore: bump version" commit
+- When multiple branches are developed simultaneously, these trivial changes
+  cause constant merge conflicts
 
-`npm version` and `git tag` are two distinct, non-atomic actions. If you tag a
-commit but forget to update the JSON (or vice-versa), your registry package and
-your Git history diverge. This scenario makes it impossible to guarantee that
-the code in the registry matches the code at that tag.
+## The Solution
 
-**HIPP ensures they are fundamentally linked by extracting the version directly
-from the Git Tag, and cryptographically signing the package contents.**
+**HIPP makes `package.json` version immutable (0.0.0)** - the **HIPP Doctrine**.
 
-### No "Chore" Noise
-
-Every release usually requires a "chore: bump version" commit. When multiple
-branches are developed simultaneously, these version changes cause constant,
-trivial merge conflicts.
-
-**HIPP makes your `package.json` version immutable (0.0.0), so it never
-conflicts and your git history stays clean.**
+Version is extracted directly from the Git Tag during publish. Your Git history
+stays clean, and your registry package is guaranteed to match your Git tag.
 
 ---
 
@@ -43,7 +33,7 @@ conflicts and your git history stays clean.**
 
 ### Setup
 
-1. Set your project's `package.json` version to `0.0.0`. This is the **HIPP Doctrine**.
+1. Set your project's `package.json` version to `0.0.0`:
 
 ```json
 { "name": "your-package", "version": "0.0.0" }
@@ -72,7 +62,8 @@ HIPP will:
 
 On first run, HIPP generates an Ed25519 keypair:
 
-- **`hipp.priv`** - Your private signing key. **Never committed to git.** Added to `.gitignore` automatically.
+- **`hipp.priv`** - Your private signing key. **Never committed to git.**
+  Added to `.gitignore` automatically.
 - **`hipp.pub`** - Your public verification key. **Committed to git** automatically.
 
 The private key holder can sign packages. The public key verifies signatures.
@@ -91,10 +82,11 @@ npx @dk/hipp -- --access public --tag beta
 
 ## Verification
 
-HIPP provides out-of-band verification to guarantee package integrity:
+HIPP provides out-of-band verification to prove package integrity:
 
 ```bash
 npx @dk/hipp verify @dk/your-package[@version]
+npx @dk/hipp verify           # verifies the installed hipp version
 ```
 
 ### How Verification Works
@@ -102,8 +94,7 @@ npx @dk/hipp verify @dk/your-package[@version]
 **Step 1: Get manifest from npm**
 
 1. Fetch the package tarball from npm registry
-2. Extract the README from the tarball
-3. Parse the JSON manifest appended to the README
+2. Extract the README and parse the JSON manifest appended to it
 
 The manifest contains:
 ```json
@@ -115,38 +106,68 @@ The manifest contains:
 }
 ```
 
-**Step 2: Clone git and stage**
+**Step 2: Clone git and verify**
 
-4. Clone the repository at the tagged commit (using origin/tag from manifest)
-5. Copy all tracked files to a staging directory
+3. Clone the repository at the tagged commit (using origin/tag from manifest)
+4. Stage all tracked files
+5. Run `npm pack` to create a tarball
+6. Compute SHA256 hash of the clean tarball
+7. Compare with the `hash` field from the npm manifest
 
-**Step 3: Verify content integrity**
+**Step 3: Verify signature**
 
-6. Run `npm pack` in the staging directory
-7. Compute the SHA256 hash of the resulting tarball
-8. Compare this hash with the `hash` field from the npm manifest
+8. Read `hipp.pub` from the cloned repository
+9. Verify the signature was created by signing:
+   `hash + "\n" + origin + "\n" + tag`
 
-**If the hashes match**: The npm package exactly matches the git repository at the tagged commit.
+**Step 4: Rebuild verification**
 
-**Step 4: Verify signature authenticity**
+10. Append the manifest to the staged README
+11. Update the staged `package.json` version to match the tag
+12. Run `npm pack` again and verify the hash matches the npm tarball
 
-9. Read `hipp.pub` from the cloned repository at the tagged commit
-10. Verify the signature using the public key
+### Three Verification Checks
 
-The signature was created by signing: `hash + "\n" + origin + "\n" + tag`
-
-**If the signature is valid**: The package was published by the holder of the private key matching `hipp.pub`.
+| Check | What it proves |
+|-------|----------------|
+| **1. Signature** | The manifest was signed by the holder of the private key matching `hipp.pub` |
+| **2. Manifest hash** | The claimed hash is accurate for this exact git revision |
+| **3. Rebuild** | The npm tarball exactly matches what you'd produce from clean git source |
 
 ### What Verification Guarantees
 
-| Check | Guarantees |
-|-------|-----------|
-| **Hash match** | npm package content exactly matches git at the tagged commit |
-| **Signature valid** | Published by holder of the private key matching `hipp.pub` |
+- **Integrity**: The code in npm exactly matches git at the tagged commit
+- **Authenticity**: The package was published by the holder of the private key
+- **Reproducibility**: The npm tarball is byte-for-byte identical to a git rebuild
 
-This provides two independent guarantees:
-- **Integrity**: The code in npm is exactly what was in git at the tag
-- **Authenticity**: The publisher controls the private key for `hipp.pub`
+### What Verification Does NOT Guarantee
+
+- **Code is safe or bug-free**: Malicious or buggy code can be signed
+- **Publisher is trustworthy**: The key holder could sign bad code intentionally
+- **Suitability**: The package may not be appropriate for your use case
+
+Verification proves that npm matches git - it says nothing about whether that
+code is correct, safe, or suitable.
+
+---
+
+## Dual-Channel Trust
+
+npm and git serve as independent verification channels:
+
+- **npm** records *when* and *what* was published by *whom*
+- **git** records the source code and the public key
+
+An attacker would need to compromise both registries to forge a valid package.
+This doesn't prove code is safe, but it proves the code in npm matches git.
+
+---
+
+## Security
+
+HIPP uses **Ed25519** public-key signatures. The private key never leaves your
+machine. The public key is distributed via git. Anyone can verify a signed
+package, but only private key holders can publish.
 
 ### Integrity Rules
 
@@ -163,14 +184,6 @@ HIPP enforces strict integrity rules when publishing:
 - HEAD commit must be contained in an origin remote branch
 - Only git-tracked files are staged
 - Only staged `package.json` is rewritten
-
----
-
-## Security
-
-HIPP uses **Ed25519** public-key signatures. The private key never leaves your
-machine. The public key is distributed via git. Anyone can verify a signed
-package, but only private key holders can publish.
 
 ---
 

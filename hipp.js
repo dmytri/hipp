@@ -107,18 +107,6 @@ function verifySignature(data, signature, publicKey) {
   }, Buffer.from(signature, 'base64'));
 }
 
-function createManifest(hash, signature) {
-  return JSON.stringify({ hash, signature }, null, 2);
-}
-
-function parseManifest(manifestStr) {
-  try {
-    return JSON.parse(manifestStr);
-  } catch {
-    return null;
-  }
-}
-
 function buildSignData(hash, origin, tag) {
   return `${hash}\n${origin}\n${tag}\n`;
 }
@@ -683,12 +671,14 @@ const verifyIndex = process.argv.indexOf('verify');
 const packageSpec = verifyIndex !== -1 ? process.argv[verifyIndex + 1] : null;
 
 if (isVerify) {
-  const specToVerify = packageSpec || (() => {
+  const specToVerify = packageSpec;
+  if (specToVerify) {
+    runVerify(specToVerify);
+  } else {
     const hippPkgPath = path.join(path.dirname(process.argv[1]), 'package.json');
     const hippPkg = JSON.parse(fs.readFileSync(hippPkgPath, 'utf8'));
-    return `${hippPkg.name}@${hippPkg.version}`;
-  })();
-  runVerify(specToVerify);
+    runVerify(`${hippPkg.name}@${hippPkg.version}`);
+  }
 } else if (process.argv.includes('--help') || process.argv.includes('-h')) {
   console.log(`\x1b[36mHIPP - High Integrity Package Publisher\x1b[0m
 
