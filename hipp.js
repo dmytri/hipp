@@ -684,7 +684,7 @@ async function run() {
     const nodeVersion = process.version;
     const hippPkgPath = path.join(path.dirname(process.argv[1]), 'package.json');
     const hippPkg = JSON.parse(fs.readFileSync(hippPkgPath, 'utf8'));
-    const hippVersion = hippPkg.version;
+    const hippVersion = hippPkg.version === '0.0.0' ? version : hippPkg.version;
     const originUrl = provenance.remoteUrl;
     const dataToSign = buildSignData(tarballHash, originUrl, rawTag, revision, name, email);
     const signature = signContent(dataToSign, privateKey);
