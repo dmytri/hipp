@@ -767,8 +767,8 @@ if (isVerify) {
       }
     } catch {}
   }
-  const hippPkgPath = path.join(path.dirname(process.argv[1]), 'package.json');
-  const hippPkg = JSON.parse(fs.readFileSync(hippPkgPath, 'utf8'));
+  const hippModuleDir = path.dirname(require.resolve('@dk/hipp/package.json'));
+  const hippPkg = JSON.parse(fs.readFileSync(path.join(hippModuleDir, 'package.json'), 'utf8'));
   const spec = hippPkg.version === '0.0.0'
     ? hippPkg.name
     : `${hippPkg.name}@${hippPkg.version}`;
