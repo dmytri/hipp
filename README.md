@@ -25,7 +25,8 @@ This creates a **State Conflict**:
 **HIPP makes Git tags the source of truth** - the version is always extracted
 from the tag, not `package.json`. You can leave `package.json` at `0.0.0` (HIPP
 rewrites it during publish) or keep it in sync with your tag (HIPP verifies the
-match).
+match). The published package always has the correct semver from your git tag —
+downstream consumers see normal versions and `npm install` works as expected.
 
 ---
 
