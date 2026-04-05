@@ -176,6 +176,7 @@ The manifest contains:
 
 - **Code is safe or bug-free**: Malicious or buggy code can be signed
 - **Publisher is trustworthy**: The key holder could sign bad code intentionally
+- **Name/email is accurate**: These are read from local `git config` and could be set to anything
 
 Verification proves that npm matches git - it says nothing about whether that
 code is correct or safe.
